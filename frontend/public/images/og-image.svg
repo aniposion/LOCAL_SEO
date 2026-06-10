@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0f1a"/>
+      <stop offset="100%" style="stop-color:#0d1829"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="80%" cy="20%" r="50%">
+      <stop offset="0%" style="stop-color:#06b6d4;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="20%" cy="80%" r="40%">
+      <stop offset="0%" style="stop-color:#14b8a6;stop-opacity:0.25"/>
+      <stop offset="100%" style="stop-color:#14b8a6;stop-opacity:0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="url(#bg)"/>
+  <rect width="100%" height="100%" fill="url(#glow1)"/>
+  <rect width="100%" height="100%" fill="url(#glow2)"/>
+
+  <!-- Grid pattern -->
+  <g opacity="0.05">
+    <line x1="0" y1="100" x2="1200" y2="100" stroke="white" stroke-width="1"/>
+    <line x1="0" y1="200" x2="1200" y2="200" stroke="white" stroke-width="1"/>
+    <line x1="0" y1="300" x2="1200" y2="300" stroke="white" stroke-width="1"/>
+    <line x1="0" y1="400" x2="1200" y2="400" stroke="white" stroke-width="1"/>
+    <line x1="0" y1="500" x2="1200" y2="500" stroke="white" stroke-width="1"/>
+    <line x1="200" y1="0" x2="200" y2="630" stroke="white" stroke-width="1"/>
+    <line x1="400" y1="0" x2="400" y2="630" stroke="white" stroke-width="1"/>
+    <line x1="600" y1="0" x2="600" y2="630" stroke="white" stroke-width="1"/>
+    <line x1="800" y1="0" x2="800" y2="630" stroke="white" stroke-width="1"/>
+    <line x1="1000" y1="0" x2="1000" y2="630" stroke="white" stroke-width="1"/>
+  </g>
+
+  <!-- Logo/Icon area -->
+  <g transform="translate(100, 250)">
+    <!-- Map pin icon -->
+    <path d="M40,0 C17.9,0 0,17.9 0,40 C0,70 40,110 40,110 S80,70 80,40 C80,17.9 62.1,0 40,0 Z M40,55 C31.7,55 25,48.3 25,40 S31.7,25 40,25 S55,31.7 55,40 S48.3,55 40,55 Z" fill="#06b6d4"/>
+  </g>
+
+  <!-- Text -->
+  <text x="200" y="290" font-family="system-ui, -apple-system, sans-serif" font-size="56" font-weight="bold" fill="white">
+    Local SEO Optimizer
+  </text>
+  <text x="200" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#94a3b8">
+    Turn Google Maps Into Calls &amp; Bookings
+  </text>
+
+  <!-- Tagline -->
+  <text x="200" y="420" font-family="system-ui, -apple-system, sans-serif" font-size="20" fill="#06b6d4">
+    AI-Powered Local SEO Automation
+  </text>
+
+  <!-- CTA hint -->
+  <rect x="200" y="460" width="220" height="50" rx="8" fill="#06b6d4"/>
+  <text x="230" y="493" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600" fill="white">
+    Start Free Audit ??
+  </text>
+
+  <!-- Stats -->
+  <g transform="translate(750, 200)" fill="white" opacity="0.9">
+    <text x="0" y="0" font-size="48" font-weight="bold">+47%</text>
+    <text x="0" y="30" font-size="16" fill="#94a3b8">More Calls</text>
+
+    <text x="0" y="100" font-size="48" font-weight="bold">+38%</text>
+    <text x="0" y="130" font-size="16" fill="#94a3b8">More Directions</text>
+
+    <text x="0" y="200" font-size="48" font-weight="bold">4.8??/text>
+    <text x="0" y="230" font-size="16" fill="#94a3b8">Avg Rating</text>
+  </g>
+
+  <!-- Border accent -->
+  <rect x="0" y="620" width="1200" height="10" fill="#06b6d4"/>
+</svg>

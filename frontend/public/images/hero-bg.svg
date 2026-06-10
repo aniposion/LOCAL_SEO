@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <!-- Gradient for base -->
+    <linearGradient id="bg-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0f1a"/>
+      <stop offset="50%" style="stop-color:#0d1829"/>
+      <stop offset="100%" style="stop-color:#0a1628"/>
+    </linearGradient>
+
+    <!-- Heatmap blob gradients -->
+    <radialGradient id="blob1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#06b6d4;stop-opacity:0.4"/>
+      <stop offset="40%" style="stop-color:#06b6d4;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:0"/>
+    </radialGradient>
+
+    <radialGradient id="blob2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#14b8a6;stop-opacity:0.35"/>
+      <stop offset="40%" style="stop-color:#14b8a6;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#14b8a6;stop-opacity:0"/>
+    </radialGradient>
+
+    <radialGradient id="blob3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#0ea5e9;stop-opacity:0.3"/>
+      <stop offset="50%" style="stop-color:#0ea5e9;stop-opacity:0.1"/>
+      <stop offset="100%" style="stop-color:#0ea5e9;stop-opacity:0"/>
+    </radialGradient>
+
+    <radialGradient id="blob4" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#22d3ee;stop-opacity:0.25"/>
+      <stop offset="45%" style="stop-color:#22d3ee;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#22d3ee;stop-opacity:0"/>
+    </radialGradient>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M 80 0 L 0 0 0 80" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="0.5"/>
+    </pattern>
+
+    <!-- City blocks pattern -->
+    <pattern id="city" width="160" height="160" patternUnits="userSpaceOnUse">
+      <path d="M 0,80 L 160,80" stroke="rgba(255,255,255,0.08)" stroke-width="1.5" fill="none"/>
+      <path d="M 80,0 L 80,160" stroke="rgba(255,255,255,0.08)" stroke-width="1.5" fill="none"/>
+      <path d="M 0,40 L 160,40" stroke="rgba(255,255,255,0.03)" stroke-width="0.5" fill="none"/>
+      <path d="M 0,120 L 160,120" stroke="rgba(255,255,255,0.03)" stroke-width="0.5" fill="none"/>
+      <path d="M 40,0 L 40,160" stroke="rgba(255,255,255,0.03)" stroke-width="0.5" fill="none"/>
+      <path d="M 120,0 L 120,160" stroke="rgba(255,255,255,0.03)" stroke-width="0.5" fill="none"/>
+      <rect x="8" y="8" width="28" height="28" rx="3" fill="rgba(255,255,255,0.02)"/>
+      <rect x="88" y="88" width="32" height="24" rx="3" fill="rgba(255,255,255,0.025)"/>
+      <rect x="124" y="12" width="24" height="32" rx="3" fill="rgba(255,255,255,0.02)"/>
+      <rect x="12" y="100" width="20" height="28" rx="3" fill="rgba(255,255,255,0.015)"/>
+    </pattern>
+
+    <!-- Blur filter -->
+    <filter id="blur1" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="60"/>
+    </filter>
+    <filter id="blur2" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="80"/>
+    </filter>
+    <filter id="blur3" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="50"/>
+    </filter>
+
+    <!-- Vignette -->
+    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" style="stop-color:transparent"/>
+      <stop offset="70%" style="stop-color:rgba(10,15,26,0.3)"/>
+      <stop offset="100%" style="stop-color:rgba(10,15,26,0.7)"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Base background -->
+  <rect width="100%" height="100%" fill="url(#bg-gradient)"/>
+
+  <!-- City grid overlay -->
+  <rect width="100%" height="100%" fill="url(#city)" opacity="0.8"/>
+  <rect width="100%" height="100%" fill="url(#grid)" opacity="0.5"/>
+
+  <!-- Heatmap blobs -->
+  <!-- Large blob top-right -->
+  <ellipse cx="1600" cy="150" rx="500" ry="400" fill="url(#blob1)" filter="url(#blur2)"/>
+
+  <!-- Large blob bottom-left -->
+  <ellipse cx="200" cy="900" rx="450" ry="380" fill="url(#blob2)" filter="url(#blur2)"/>
+
+  <!-- Medium blob center-right -->
+  <ellipse cx="1400" cy="550" rx="320" ry="280" fill="url(#blob3)" filter="url(#blur1)"/>
+
+  <!-- Medium blob left -->
+  <ellipse cx="350" cy="400" rx="280" ry="240" fill="url(#blob4)" filter="url(#blur1)"/>
+
+  <!-- Small blob center -->
+  <ellipse cx="960" cy="650" rx="200" ry="180" fill="url(#blob1)" filter="url(#blur3)" opacity="0.6"/>
+
+  <!-- Small accent blob top-left -->
+  <ellipse cx="500" cy="180" rx="180" ry="150" fill="url(#blob2)" filter="url(#blur3)" opacity="0.5"/>
+
+  <!-- Small accent blob bottom-right -->
+  <ellipse cx="1500" cy="850" rx="200" ry="160" fill="url(#blob4)" filter="url(#blur3)" opacity="0.5"/>
+
+  <!-- Location pins (very subtle) -->
+  <g opacity="0.15">
+    <path d="M1350,320 c0-22,18-40,40-40 s40,18,40,40 c0,30-40,70-40,70 s-40-40-40-70z" fill="#06b6d4"/>
+    <circle cx="1390" cy="318" r="12" fill="#0a0f1a"/>
+  </g>
+  <g opacity="0.1">
+    <path d="M450,550 c0-18,14-32,32-32 s32,14,32,32 c0,24-32,56-32,56 s-32-32-32-56z" fill="#14b8a6"/>
+    <circle cx="482" cy="548" r="10" fill="#0a0f1a"/>
+  </g>
+
+  <!-- Connection lines (dotted routes) -->
+  <path d="M 450,560 Q 700,500 960,480 T 1350,330" stroke="rgba(6,182,212,0.12)" stroke-width="2" fill="none" stroke-dasharray="8,12"/>
+  <path d="M 200,700 Q 500,600 800,650 T 1400,500" stroke="rgba(20,184,166,0.08)" stroke-width="1.5" fill="none" stroke-dasharray="6,10"/>
+
+  <!-- Center glow for text area -->
+  <ellipse cx="960" cy="450" rx="600" ry="300" fill="rgba(6,182,212,0.06)" filter="url(#blur2)"/>
+
+  <!-- Vignette overlay -->
+  <rect width="100%" height="100%" fill="url(#vignette)"/>
+</svg>
