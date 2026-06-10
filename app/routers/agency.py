@@ -1,6 +1,6 @@
 """Multi-location & Agency Mode router."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -49,13 +49,13 @@ class WhiteLabelRequest(BaseModel):
 class BulkReportRequest(BaseModel):
     """Request to send bulk reports."""
     location_ids: list[UUID] | None = None
-    report_type: str = Field(default="weekly", description="weekly or monthly")
+    report_type: Literal["weekly", "monthly"] = Field(default="weekly", description="weekly or monthly")
 
 
 class ReportScheduleRequest(BaseModel):
     """Request to schedule automatic reports."""
     enabled: bool = True
-    frequency: str = Field(default="weekly", description="weekly or monthly")
+    frequency: Literal["weekly", "monthly"] = Field(default="weekly", description="weekly or monthly")
     day_of_week: int | None = Field(default=0, ge=0, le=6, description="0=Monday")
     day_of_month: int | None = Field(default=1, ge=1, le=28)
     time: str = Field(default="09:00", pattern=r"^\d{2}:\d{2}$")

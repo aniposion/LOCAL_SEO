@@ -12,6 +12,17 @@ from app.models.channel import Channel, ChannelType
 from app.models.location import Location
 
 
+def _json_safe(value):
+    """Convert provider metrics into JSON-serializable primitives."""
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 class AnalyticsService:
     """Service for collecting analytics from platforms."""
 
@@ -44,22 +55,30 @@ class AnalyticsService:
         )
 
         for channel in channels:
-            if not channel.credentials:
+            credentials = channel.get_credentials()
+            if not credentials:
                 continue
 
             try:
                 if channel.type == ChannelType.GBP:
-                    await self._collect_gbp(location_id, channel)
+                    await self._collect_gbp(location_id, channel, credentials)
                 elif channel.type == ChannelType.INSTAGRAM:
-                    await self._collect_instagram(location_id, channel)
+                    await self._collect_instagram(location_id, channel, credentials)
             except Exception as e:
                 # Log error but continue with other channels
+                self.db.rollback()
                 channel.error_message = str(e)
+                self.db.add(channel)
                 self.db.commit()
 
-    async def _collect_gbp(self, location_id: UUID, channel: Channel) -> None:
+    async def _collect_gbp(
+        self,
+        location_id: UUID,
+        channel: Channel,
+        credentials: dict | None = None,
+    ) -> None:
         """Collect GBP analytics."""
-        client = GBPClient(channel.credentials)
+        client = GBPClient(credentials or channel.get_credentials())
 
         # Get metrics for yesterday (most recent complete day)
         yesterday = date.today() - timedelta(days=1)
@@ -86,7 +105,7 @@ class AnalyticsService:
                 existing.clicks = day_metrics.get("clicks")
                 existing.calls = day_metrics.get("calls")
                 existing.direction_requests = day_metrics.get("direction_requests")
-                existing.source_raw = day_metrics
+                existing.source_raw = _json_safe(day_metrics)
             else:
                 # Create new record
                 analytics = Analytics(
@@ -97,17 +116,22 @@ class AnalyticsService:
                     clicks=day_metrics.get("clicks"),
                     calls=day_metrics.get("calls"),
                     direction_requests=day_metrics.get("direction_requests"),
-                    source_raw=day_metrics,
+                    source_raw=_json_safe(day_metrics),
                 )
                 self.db.add(analytics)
 
-        channel.last_sync_at = datetime.now(timezone.utc).isoformat()
+        channel.last_sync_at = datetime.now(timezone.utc)
         channel.error_message = None
         self.db.commit()
 
-    async def _collect_instagram(self, location_id: UUID, channel: Channel) -> None:
+    async def _collect_instagram(
+        self,
+        location_id: UUID,
+        channel: Channel,
+        credentials: dict | None = None,
+    ) -> None:
         """Collect Instagram analytics."""
-        client = InstagramClient(channel.credentials)
+        client = InstagramClient(credentials or channel.get_credentials())
 
         # Get insights for yesterday
         yesterday = date.today() - timedelta(days=1)
@@ -133,7 +157,7 @@ class AnalyticsService:
                 existing.comments = day_insights.get("comments")
                 existing.shares = day_insights.get("shares")
                 existing.saves = day_insights.get("saves")
-                existing.source_raw = day_insights
+                existing.source_raw = _json_safe(day_insights)
             else:
                 analytics = Analytics(
                     location_id=location_id,
@@ -144,10 +168,10 @@ class AnalyticsService:
                     comments=day_insights.get("comments"),
                     shares=day_insights.get("shares"),
                     saves=day_insights.get("saves"),
-                    source_raw=day_insights,
+                    source_raw=_json_safe(day_insights),
                 )
                 self.db.add(analytics)
 
-        channel.last_sync_at = datetime.now(timezone.utc).isoformat()
+        channel.last_sync_at = datetime.now(timezone.utc)
         channel.error_message = None
         self.db.commit()

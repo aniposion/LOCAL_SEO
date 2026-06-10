@@ -1,5 +1,8 @@
 """Security utilities: JWT tokens and password hashing."""
 
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,6 +23,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     """Hash a password."""
     return pwd_context.hash(password)
+
+
+def generate_opaque_token(length: int = 32) -> str:
+    """Generate a URL-safe opaque token for email verification/reset flows."""
+    return secrets.token_urlsafe(length)
+
+
+def hash_opaque_token(token: str) -> str:
+    """Hash an opaque token so the raw token is never stored in the database."""
+    return hmac.new(
+        settings.jwt_secret.encode("utf-8"),
+        token.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def create_access_token(

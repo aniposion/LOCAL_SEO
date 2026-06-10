@@ -40,7 +40,7 @@ disallow_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -p no:cacheprovider"
 
 [tool.coverage.run]
 source = ["app"]

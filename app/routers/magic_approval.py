@@ -356,7 +356,7 @@ def _generate_edit_page(post_id: str, token: str, title: str, body: str) -> str:
                 }};
                 
                 try {{
-                    const response = await fetch('/api/v1/approve/{post_id}/save', {{
+                    const response = await fetch('/approve/{post_id}/save', {{
                         method: 'POST',
                         headers: {{ 'Content-Type': 'application/json' }},
                         body: JSON.stringify(data)

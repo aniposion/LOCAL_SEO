@@ -1,11 +1,9 @@
-"""Google Business Profile API integration."""
+﻿"""Google Business Profile API integration."""
 
 from datetime import date
 from typing import Any
 
 import httpx
-
-from app.core.config import settings
 
 
 class GBPClient:
@@ -16,6 +14,7 @@ class GBPClient:
         self.location_id = credentials.get("location_id")
         self.account_id = credentials.get("account_id")
         self.base_url = "https://mybusiness.googleapis.com/v4"
+        self.qanda_base_url = "https://mybusinessqanda.googleapis.com/v1"
         self.timeout = httpx.Timeout(30.0)
 
     async def _request(
@@ -46,6 +45,34 @@ class GBPClient:
 
             return response.json() if response.text else {}
 
+    async def _qanda_request(
+        self,
+        method: str,
+        endpoint: str,
+        **kwargs: Any,
+    ) -> dict:
+        """Make authenticated request to GBP Q&A API."""
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.request(
+                method,
+                f"{self.qanda_base_url}/{endpoint}",
+                headers=headers,
+                **kwargs,
+            )
+
+            if response.status_code == 429:
+                raise Exception("Rate limit exceeded")
+
+            if response.status_code >= 400:
+                raise Exception(f"GBP Q&A API error: {response.status_code} - {response.text}")
+
+            return response.json() if response.text else {}
+
     async def create_post(
         self,
         title: str | None,
@@ -61,7 +88,6 @@ class GBPClient:
         }
 
         if image_url:
-            # First upload media
             media_id = await self._upload_media(image_url)
             if media_id:
                 post_data["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": image_url}]
@@ -94,7 +120,6 @@ class GBPClient:
         end_date: date,
     ) -> list[dict]:
         """Get performance metrics for the location."""
-        # Use the Business Profile Performance API
         endpoint = f"accounts/{self.account_id}/locations/{self.location_id}:reportInsights"
 
         request_data = {
@@ -124,8 +149,6 @@ class GBPClient:
                 return []
 
             metrics = location_metrics[0].get("metricValues", [])
-
-            # Aggregate metrics
             aggregated = {
                 "date": end_date,
                 "impressions": 0,
@@ -149,13 +172,29 @@ class GBPClient:
 
             return [aggregated]
 
-        except Exception as e:
-            # Return empty on error (will be logged)
+        except Exception:
             return []
 
     async def get_reviews(self, page_size: int = 50) -> list[dict]:
         """Get reviews for the location."""
         endpoint = f"accounts/{self.account_id}/locations/{self.location_id}/reviews"
-
         result = await self._request("GET", endpoint, params={"pageSize": page_size})
         return result.get("reviews", [])
+
+    async def get_questions(self, location_id: str | None = None) -> dict:
+        """Get questions for the location from GBP Q&A."""
+        target_location_id = location_id or self.location_id
+        endpoint = f"locations/{target_location_id}/questions"
+        return await self._qanda_request("GET", endpoint, params={"pageSize": 50})
+
+    async def answer_question(
+        self,
+        location_id: str | None,
+        question_id: str,
+        answer_text: str,
+    ) -> dict:
+        """Post an answer to a GBP question."""
+        target_location_id = location_id or self.location_id
+        endpoint = f"locations/{target_location_id}/questions/{question_id}/answers"
+        payload = {"answer": {"text": answer_text}}
+        return await self._qanda_request("POST", endpoint, json=payload)

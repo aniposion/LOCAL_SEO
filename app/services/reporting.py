@@ -1,19 +1,26 @@
 """Reporting service for generating PDF reports."""
 
-import io
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.integrations.email import EmailClient
-from app.integrations.storage import StorageClient
+from app.models.account import Account
 from app.models.analytics import Analytics
 from app.models.location import Location
 from app.models.post import Post, PostStatus
 from app.models.report import Report
 from app.models.seo_score import SEOScore
+from app.services.notification import NotificationService
+from app.services.storage import get_storage_service
+
+
+class ReportingUnavailableError(RuntimeError):
+    """Raised when report delivery dependencies are not configured."""
+
+
+class ReportingDeliveryError(RuntimeError):
+    """Raised when report upload or delivery fails after configuration exists."""
 
 
 class ReportingService:
@@ -21,8 +28,8 @@ class ReportingService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
-        self.storage = StorageClient()
-        self.email = EmailClient()
+        self.storage = get_storage_service()
+        self.notification_service = NotificationService(db)
 
     async def generate_weekly_report(
         self,
@@ -30,10 +37,55 @@ class ReportingService:
         send_email: bool = True,
     ) -> Report:
         """Generate a weekly PDF report for a location."""
-        # Calculate period
+        period_start, period_end = self._previous_week_period()
+        return await self._generate_period_report(
+            location_id=location_id,
+            period_start=period_start,
+            period_end=period_end,
+            send_email=send_email,
+            report_label="Weekly",
+        )
+
+    async def generate_monthly_report(
+        self,
+        location_id: UUID,
+        send_email: bool = True,
+    ) -> Report:
+        """Generate a monthly PDF report for a location."""
+        period_start, period_end = self._previous_month_period()
+        return await self._generate_period_report(
+            location_id=location_id,
+            period_start=period_start,
+            period_end=period_end,
+            send_email=send_email,
+            report_label="Monthly",
+        )
+
+    def _previous_week_period(self) -> tuple[date, date]:
+        """Return the previous fully completed Monday-Sunday window."""
         today = date.today()
-        period_end = today - timedelta(days=today.weekday() + 1)  # Last Sunday
-        period_start = period_end - timedelta(days=6)  # Previous Monday
+        period_end = today - timedelta(days=today.weekday() + 1)
+        period_start = period_end - timedelta(days=6)
+        return period_start, period_end
+
+    def _previous_month_period(self) -> tuple[date, date]:
+        """Return the previous fully completed calendar month."""
+        today = date.today()
+        current_month_start = date(today.year, today.month, 1)
+        period_end = current_month_start - timedelta(days=1)
+        period_start = date(period_end.year, period_end.month, 1)
+        return period_start, period_end
+
+    async def _generate_period_report(
+        self,
+        *,
+        location_id: UUID,
+        period_start: date,
+        period_end: date,
+        send_email: bool,
+        report_label: str,
+    ) -> Report:
+        """Generate and optionally email a report for an explicit period."""
 
         # Get location
         location = self.db.query(Location).filter(Location.id == location_id).first()
@@ -44,11 +96,30 @@ class ReportingService:
         summary = await self._gather_report_data(location_id, period_start, period_end)
 
         # Generate PDF
-        pdf_content = await self._generate_pdf(location, period_start, period_end, summary)
+        pdf_content = await self._generate_pdf(
+            location,
+            period_start,
+            period_end,
+            summary,
+            report_label=report_label,
+        )
 
-        # Upload to S3
+        if not self.storage.is_configured():
+            raise ReportingUnavailableError(
+                "Cloud storage must be configured for weekly report uploads."
+            )
+
+        # Upload report to the configured cloud storage provider
         file_key = f"reports/{location_id}/{period_start.isoformat()}-{period_end.isoformat()}.pdf"
-        file_url = await self.storage.upload(file_key, pdf_content, content_type="application/pdf")
+        try:
+            file_url = self.storage.upload_file(
+                pdf_content,
+                filename=f"{period_start.isoformat()}-{period_end.isoformat()}.pdf",
+                content_type="application/pdf",
+                object_name=file_key,
+            )
+        except Exception as exc:
+            raise ReportingDeliveryError(str(exc)) from exc
 
         # Create report record
         report = Report(
@@ -62,18 +133,23 @@ class ReportingService:
 
         # Send email if requested
         if send_email:
-            account = location.account
-            if account and account.email:
-                await self._send_report_email(
-                    to_email=account.email,
-                    location_name=location.name,
-                    period_start=period_start,
-                    period_end=period_end,
-                    file_url=file_url,
-                    summary=summary,
+            account = self.db.query(Account).filter(Account.id == location.account_id).first()
+            if not account or not account.email:
+                raise ReportingUnavailableError(
+                    "Report email delivery requires a location owner email address."
                 )
-                report.email_sent = True
-                report.email_sent_at = datetime.now(timezone.utc).isoformat()
+
+            await self._send_report_email(
+                to_email=account.email,
+                location_name=location.name,
+                period_start=period_start,
+                period_end=period_end,
+                file_url=file_url,
+                summary=summary,
+                report_label=report_label,
+            )
+            report.email_sent = True
+            report.email_sent_at = datetime.now(timezone.utc).isoformat()
 
         self.db.commit()
         self.db.refresh(report)
@@ -196,6 +272,8 @@ class ReportingService:
         period_start: date,
         period_end: date,
         summary: dict,
+        *,
+        report_label: str,
     ) -> bytes:
         """Generate PDF report from HTML template."""
         # For MVP, generate simple HTML and convert to PDF
@@ -205,7 +283,7 @@ class ReportingService:
         <html>
         <head>
             <meta charset="utf-8">
-            <title>Weekly SEO Report - {location.name}</title>
+            <title>{report_label} SEO Report - {location.name}</title>
             <style>
                 body {{ font-family: Arial, sans-serif; margin: 40px; }}
                 h1 {{ color: #333; }}
@@ -216,7 +294,7 @@ class ReportingService:
             </style>
         </head>
         <body>
-            <h1>Weekly SEO Report</h1>
+            <h1>{report_label} SEO Report</h1>
             <h2>{location.name}</h2>
             <p>Period: {period_start.isoformat()} to {period_end.isoformat()}</p>
             
@@ -262,12 +340,17 @@ class ReportingService:
         period_end: date,
         file_url: str,
         summary: dict,
+        *,
+        report_label: str,
     ) -> None:
         """Send report email."""
-        subject = f"Weekly SEO Report - {location_name} ({period_start.isoformat()} to {period_end.isoformat()})"
+        subject = (
+            f"{report_label} SEO Report - {location_name} "
+            f"({period_start.isoformat()} to {period_end.isoformat()})"
+        )
 
         body = f"""
-        Your weekly SEO report for {location_name} is ready!
+        Your {report_label.lower()} SEO report for {location_name} is ready!
         
         Period: {period_start.isoformat()} to {period_end.isoformat()}
         
@@ -282,4 +365,33 @@ class ReportingService:
         {chr(10).join(f'- {action}' for action in summary['next_actions'])}
         """
 
-        await self.email.send(to_email=to_email, subject=subject, body=body)
+        html_body = (
+            f"<h2>{report_label} SEO Report</h2>"
+            f"<p><strong>{location_name}</strong></p>"
+            f"<p>Period: {period_start.isoformat()} to {period_end.isoformat()}</p>"
+            f"<p><a href=\"{file_url}\">Download your full report</a></p>"
+            "<ul>"
+            f"<li>GBP Impressions: {summary['kpi_cards']['gbp']['impressions']}</li>"
+            f"<li>Instagram Reach: {summary['kpi_cards']['instagram']['reach']}</li>"
+            f"<li>Website Views: {summary['kpi_cards']['website']['views']}</li>"
+            "</ul>"
+            "<p>Recommended Actions:</p>"
+            "<ul>"
+            + "".join(f"<li>{action}</li>" for action in summary["next_actions"])
+            + "</ul>"
+        )
+
+        result = await self.notification_service.send_email(
+            to_email=to_email,
+            subject=subject,
+            html_body=html_body,
+            text_body=body,
+        )
+        if result.get("success"):
+            return
+
+        error_message = str(result.get("error") or "Report email delivery failed").strip()
+        lowered_error = error_message.lower()
+        if "not configured" in lowered_error or "unavailable" in lowered_error:
+            raise ReportingUnavailableError(error_message)
+        raise ReportingDeliveryError(error_message)

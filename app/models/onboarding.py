@@ -20,6 +20,7 @@ from sqlalchemy import JSON, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class OnboardingStatus(str, enum.Enum):
@@ -50,7 +51,8 @@ class OnboardingAudit(Base):
     __tablename__ = "onboarding_audits"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True)
+    contact_email = Column(String(255), nullable=True)
     
     # Business input
     business_name = Column(String(255), nullable=False)
@@ -98,7 +100,9 @@ class OnboardingAudit(Base):
     
     # Scores
     total_score = Column(Float)  # 0-100
-    grade = Column(Enum(AuditGrade))
+    grade = Column(
+        Enum(AuditGrade, values_callable=lambda enum_cls: [item.value for item in enum_cls])
+    )
     review_score = Column(Float)
     activity_score = Column(Float)
     completeness_score = Column(Float)
@@ -112,7 +116,13 @@ class OnboardingAudit(Base):
     recommended_plan = Column(String(50))  # starter, pro, agency
     
     # Status
-    status = Column(Enum(OnboardingStatus), default=OnboardingStatus.PENDING)
+    status = Column(
+        Enum(
+            OnboardingStatus,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        default=OnboardingStatus.PENDING,
+    )
     error_message = Column(Text)
     
     # Timestamps
@@ -174,6 +184,43 @@ class OnboardingAudit(Base):
             missing.append("website")
         if not self.has_description:
             missing.append("description")
-        if self.photo_count < 5:
+        if (self.photo_count or 0) < 5:
             missing.append("photos")
         return missing
+
+
+class OnboardingProgress(Base):
+    """
+    User onboarding progress tracking.
+    
+    Tracks completion of key activation steps to measure time-to-activation.
+    """
+    __tablename__ = "onboarding_progress"
+    
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    completed_steps = Column(Integer, nullable=False, default=0)
+    total_steps = Column(Integer, nullable=False, default=4)
+    current_step = Column(String(50), nullable=True)
+    steps_data = Column(JSONB, nullable=False, server_default='{}')
+    # steps_data: {"run_audit": "2026-01-05T10:00:00Z", "view_insights": null, ...}
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(), onupdate=lambda: datetime.now())
+    
+    # Relationships
+    account = relationship("Account", back_populates="onboarding_progress")
+    
+    def __repr__(self):
+        return f"<OnboardingProgress account={self.account_id} {self.completed_steps}/{self.total_steps}>"
+    
+    @property
+    def is_completed(self) -> bool:
+        """Check if onboarding is completed."""
+        return self.completed_steps >= self.total_steps
+    
+    @property
+    def completion_percentage(self) -> float:
+        """Get completion percentage."""
+        if self.total_steps == 0:
+            return 0.0
+        return (self.completed_steps / self.total_steps) * 100

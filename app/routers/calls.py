@@ -1,350 +1,293 @@
-"""
-Missed Call Text Back Router - Twilio Integration
-"""
-from datetime import datetime, timedelta
+﻿"""P3: Calls & SMS Router - aligned with existing models."""
+
+from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from uuid import UUID
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.routers.deps import get_current_account, get_db
+from app.db.session import get_db
 from app.models.account import Account
+from app.models.calls import SMSThread
+from app.models.location import Location
+from app.routers.deps import get_current_account
+from app.services.call_text_back_service import SMSUsageLimitError, get_call_text_back_service
+from app.services.feature_access import FeatureAccessService
+from app.services.twilio_service import TwilioDeliveryError, TwilioUnavailableError
 
 router = APIRouter(prefix="/calls", tags=["Calls"])
 
 
-# ============ Schemas ============
+class CallLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-class CallLog(BaseModel):
     id: str
-    caller_number: str
-    status: str  # answered, missed, busy
-    duration: Optional[int] = None
+    caller_phone: str
+    masked_phone: str
+    call_status: str
+    call_duration: int
     sms_sent: bool
+    sms_sent_at: Optional[datetime]
     created_at: datetime
-
-
-class CallLogsResponse(BaseModel):
-    calls: list[CallLog]
-    total: int
-    missed_count: int
-    sms_sent_count: int
-
-
-class SMSTemplate(BaseModel):
-    id: str
-    name: str
-    category: str
-    message: str
-    is_active: bool
-
-
-class TemplatesResponse(BaseModel):
-    templates: list[SMSTemplate]
-
-
-class CreateTemplateRequest(BaseModel):
-    name: str
-    category: str
-    message: str
-
-
-class UpdateTemplateRequest(BaseModel):
-    name: Optional[str] = None
-    category: Optional[str] = None
-    message: Optional[str] = None
-    is_active: Optional[bool] = None
-
-
-class CallSettingsResponse(BaseModel):
-    forwarding_number: Optional[str]
-    twilio_number: Optional[str]
-    is_enabled: bool
-    sms_delay_seconds: int
-
-
-class UpdateCallSettingsRequest(BaseModel):
-    forwarding_number: Optional[str] = None
-    is_enabled: Optional[bool] = None
-    sms_delay_seconds: Optional[int] = None
 
 
 class CallStatsResponse(BaseModel):
     total_calls: int
-    answered_calls: int
     missed_calls: int
-    sms_sent: int
-    recovery_rate: float
+    answered_calls: int
+    text_backs_sent: int
+    text_back_rate: float
 
 
-# ============ Endpoints ============
+class ThreadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-@router.get("/{location_id}/logs", response_model=CallLogsResponse)
-async def get_call_logs(
-    location_id: str,
-    days: int = 7,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Get call logs for a location."""
-    from app.models.location import Location
-    
-    location = db.query(Location).filter(
-        Location.id == location_id,
-        Location.account_id == account.id
-    ).first()
-    
+    id: str
+    customer_phone: str
+    status: str
+    last_message_at: Optional[datetime]
+    unread_count: int
+    created_at: datetime
+
+
+class MessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    direction: str
+    body: str
+    status: Optional[str]
+    created_at: datetime
+
+
+class SettingsResponse(BaseModel):
+    twilio_number: str
+    forward_to: str
+    missed_call_sms_enabled: bool
+    sms_template: str
+
+
+class SendMessageRequest(BaseModel):
+    body: str
+
+
+class UpdateSettingsRequest(BaseModel):
+    enabled: Optional[bool] = None
+    sms_template: Optional[str] = None
+
+
+def _mask_phone(phone: str) -> str:
+    if len(phone) >= 8:
+        return phone[:3] + "****" + phone[-4:]
+    return "****"
+
+
+def _get_owned_location(db: Session, location_id: UUID, account_id: UUID) -> Location:
+    location = (
+        db.query(Location)
+        .filter(Location.id == location_id, Location.account_id == account_id)
+        .first()
+    )
     if not location:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return location
+
+
+def _get_owned_thread(db: Session, location_id: UUID, thread_id: UUID, account_id: UUID) -> SMSThread:
+    thread = (
+        db.query(SMSThread)
+        .filter(SMSThread.id == thread_id, SMSThread.location_id == location_id)
+        .first()
+    )
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    _get_owned_location(db, location_id, account_id)
+    return thread
+
+
+@router.get("/{location_id}/logs")
+def get_call_logs(
+    location_id: UUID,
+    status: Optional[str] = Query(None),
+    days: int = Query(30, ge=1, le=90),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    _get_owned_location(db, location_id, current_user.id)
+    logs = get_call_text_back_service(db).get_call_logs(location_id, status, days, limit)
+    return {
+        "items": [
+            {
+                "id": str(log.id),
+                "caller_phone": log.caller_number,
+                "masked_phone": _mask_phone(log.caller_number),
+                "call_status": log.call_status,
+                "call_duration": log.call_duration,
+                "sms_sent": log.sms_sent,
+                "sms_sent_at": log.sms_sent_at,
+                "created_at": log.created_at,
+            }
+            for log in logs
+        ],
+        "total": len(logs),
+    }
+
+
+@router.get("/{location_id}/stats")
+def get_call_stats(
+    location_id: UUID,
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    _get_owned_location(db, location_id, current_user.id)
+    return get_call_text_back_service(db).get_call_stats(location_id, days)
+
+
+@router.get("/{location_id}/threads")
+def get_threads(
+    location_id: UUID,
+    unread_only: bool = Query(False),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    _get_owned_location(db, location_id, current_user.id)
+    threads = get_call_text_back_service(db).get_threads(location_id, None, limit)
+    if unread_only:
+        threads = [thread for thread in threads if thread.unread_count > 0]
+    total_unread = sum(thread.unread_count for thread in threads)
+    return {
+        "items": [
+            {
+                "id": str(thread.id),
+                "customer_phone": thread.customer_phone,
+                "masked_phone": _mask_phone(thread.customer_phone),
+                "status": thread.status.value if hasattr(thread.status, "value") else str(thread.status),
+                "last_message_at": thread.last_message_at,
+                "unread_count": thread.unread_count,
+                "created_at": thread.created_at,
+            }
+            for thread in threads
+        ],
+        "total": len(threads),
+        "total_unread": total_unread,
+    }
+
+
+@router.get("/{location_id}/threads/{thread_id}")
+def get_thread_messages(
+    location_id: UUID,
+    thread_id: UUID,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    _get_owned_thread(db, location_id, thread_id, current_user.id)
+    messages = get_call_text_back_service(db).get_thread_messages(thread_id, limit)
+    return {
+        "messages": [
+            {
+                "id": str(message.id),
+                "direction": message.direction.value if hasattr(message.direction, "value") else str(message.direction),
+                "body": message.body,
+                "status": message.status,
+                "created_at": message.created_at,
+            }
+            for message in messages
+        ]
+    }
+
+
+@router.post("/{location_id}/threads/{thread_id}/send")
+async def send_message(
+    location_id: UUID,
+    thread_id: UUID,
+    payload: Optional[SendMessageRequest] = Body(default=None),
+    body_query: Optional[str] = Query(default=None, alias="body", min_length=1, max_length=1000),
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    _get_owned_thread(db, location_id, thread_id, current_user.id)
+    message_body = payload.body.strip() if payload and payload.body else None
+    if not message_body and body_query:
+        message_body = body_query.strip()
+    if not message_body:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message body is required")
+
+    FeatureAccessService(db).check_feature_access(current_user, "missed_call_text_back")
+
+    try:
+        message = await get_call_text_back_service(db).send_sms(thread_id, message_body)
+    except SMSUsageLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=exc.detail) from exc
+    except TwilioUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except TwilioDeliveryError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"success": True, "message_id": str(message.id), "status": message.status}
+
+
+@router.post("/{location_id}/threads/{thread_id}/read")
+def mark_thread_read(
+    location_id: UUID,
+    thread_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    thread = _get_owned_thread(db, location_id, thread_id, current_user.id)
+    thread.unread_count = 0
+    db.commit()
+    return {"success": True}
+
+
+@router.get("/{location_id}/settings")
+def get_settings(
+    location_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_account),
+):
+    _get_owned_location(db, location_id, current_user.id)
+    settings = get_call_text_back_service(db).get_settings(location_id)
+    if not settings:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Location not found"
+            detail="Settings not found. Please configure a Twilio number first.",
         )
-    
-    # In production, fetch from Twilio API or database
-    # Demo data for now
-    demo_calls = [
-        CallLog(
-            id="c1",
-            caller_number="+1 (555) 123-4567",
-            status="missed",
-            sms_sent=True,
-            created_at=datetime.now() - timedelta(hours=1),
-        ),
-        CallLog(
-            id="c2",
-            caller_number="+1 (555) 234-5678",
-            status="answered",
-            duration=180,
-            sms_sent=False,
-            created_at=datetime.now() - timedelta(hours=2),
-        ),
-        CallLog(
-            id="c3",
-            caller_number="+1 (555) 345-6789",
-            status="missed",
-            sms_sent=True,
-            created_at=datetime.now() - timedelta(hours=3),
-        ),
-        CallLog(
-            id="c4",
-            caller_number="+1 (555) 456-7890",
-            status="busy",
-            sms_sent=True,
-            created_at=datetime.now() - timedelta(hours=4),
-        ),
-        CallLog(
-            id="c5",
-            caller_number="+1 (555) 567-8901",
-            status="answered",
-            duration=245,
-            sms_sent=False,
-            created_at=datetime.now() - timedelta(hours=5),
-        ),
-    ]
-    
-    missed_count = sum(1 for c in demo_calls if c.status in ["missed", "busy"])
-    sms_sent_count = sum(1 for c in demo_calls if c.sms_sent)
-    
-    return CallLogsResponse(
-        calls=demo_calls,
-        total=len(demo_calls),
-        missed_count=missed_count,
-        sms_sent_count=sms_sent_count,
-    )
+    return {
+        "twilio_number": settings.twilio_number,
+        "forward_to": settings.forward_to,
+        "enabled": settings.missed_call_sms_enabled,
+        "sms_template": settings.sms_template,
+    }
 
 
-@router.get("/{location_id}/stats", response_model=CallStatsResponse)
-async def get_call_stats(
-    location_id: str,
-    days: int = 7,
+@router.put("/{location_id}/settings")
+def update_settings(
+    location_id: UUID,
+    payload: Optional[UpdateSettingsRequest] = Body(default=None),
+    enabled_query: Optional[bool] = Query(default=None, alias="enabled"),
+    sms_template_query: Optional[str] = Query(default=None, alias="sms_template"),
     db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
+    current_user: Account = Depends(get_current_account),
 ):
-    """Get call statistics for a location."""
-    from app.models.location import Location
-    
-    location = db.query(Location).filter(
-        Location.id == location_id,
-        Location.account_id == account.id
-    ).first()
-    
-    if not location:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Location not found"
-        )
-    
-    # Demo stats
-    total = 25
-    answered = 18
-    missed = 7
-    sms_sent = 6
-    
-    return CallStatsResponse(
-        total_calls=total,
-        answered_calls=answered,
-        missed_calls=missed,
-        sms_sent=sms_sent,
-        recovery_rate=round(sms_sent / missed * 100, 1) if missed > 0 else 100.0,
-    )
+    _get_owned_location(db, location_id, current_user.id)
+    enabled = payload.enabled if payload and payload.enabled is not None else enabled_query
+    sms_template = payload.sms_template if payload and payload.sms_template is not None else sms_template_query
 
+    if enabled is True:
+        FeatureAccessService(db).check_feature_access(current_user, "missed_call_text_back")
 
-@router.get("/{location_id}/templates", response_model=TemplatesResponse)
-async def get_templates(
-    location_id: str,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Get SMS templates for a location."""
-    # Demo templates
-    templates = [
-        SMSTemplate(
-            id="t1",
-            name="Default",
-            category="default",
-            message="Hi! Sorry we missed your call. We're currently busy helping other customers. How can we help you? Reply to this message or call us back!",
-            is_active=True,
-        ),
-        SMSTemplate(
-            id="t2",
-            name="Restaurant",
-            category="restaurant",
-            message="Thanks for calling! We're currently busy in the kitchen. Would you like to make a reservation or place an order? Reply here or call back!",
-            is_active=False,
-        ),
-        SMSTemplate(
-            id="t3",
-            name="After Hours",
-            category="after_hours",
-            message="Thanks for calling! We're currently closed. Our hours are Mon-Sat 9AM-9PM. Leave us a message and we'll get back to you first thing!",
-            is_active=False,
-        ),
-    ]
-    
-    return TemplatesResponse(templates=templates)
-
-
-@router.post("/{location_id}/templates", response_model=SMSTemplate)
-async def create_template(
-    location_id: str,
-    request: CreateTemplateRequest,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Create a new SMS template."""
-    # In production, save to database
-    new_template = SMSTemplate(
-        id=f"t{datetime.now().timestamp()}",
-        name=request.name,
-        category=request.category,
-        message=request.message,
-        is_active=False,
-    )
-    
-    return new_template
-
-
-@router.put("/{location_id}/templates/{template_id}", response_model=SMSTemplate)
-async def update_template(
-    location_id: str,
-    template_id: str,
-    request: UpdateTemplateRequest,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Update an SMS template."""
-    # In production, update in database
-    updated = SMSTemplate(
-        id=template_id,
-        name=request.name or "Updated Template",
-        category=request.category or "default",
-        message=request.message or "Updated message",
-        is_active=request.is_active or False,
-    )
-    
-    return updated
-
-
-@router.delete("/{location_id}/templates/{template_id}")
-async def delete_template(
-    location_id: str,
-    template_id: str,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Delete an SMS template."""
-    return {"success": True, "message": "Template deleted"}
-
-
-@router.post("/{location_id}/templates/{template_id}/activate")
-async def activate_template(
-    location_id: str,
-    template_id: str,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Activate an SMS template (deactivates others)."""
-    return {"success": True, "message": "Template activated"}
-
-
-@router.get("/{location_id}/settings", response_model=CallSettingsResponse)
-async def get_call_settings(
-    location_id: str,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Get call settings for a location."""
-    from app.models.location import Location
-    
-    location = db.query(Location).filter(
-        Location.id == location_id,
-        Location.account_id == account.id
-    ).first()
-    
-    if not location:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Location not found"
-        )
-    
-    # Demo settings
-    return CallSettingsResponse(
-        forwarding_number=location.phone or "+1 (555) 000-1234",
-        twilio_number="+1 (555) 999-8765",
-        is_enabled=True,
-        sms_delay_seconds=30,
-    )
-
-
-@router.put("/{location_id}/settings", response_model=CallSettingsResponse)
-async def update_call_settings(
-    location_id: str,
-    request: UpdateCallSettingsRequest,
-    db: Session = Depends(get_db),
-    account: Account = Depends(get_current_account),
-):
-    """Update call settings for a location."""
-    from app.models.location import Location
-    
-    location = db.query(Location).filter(
-        Location.id == location_id,
-        Location.account_id == account.id
-    ).first()
-    
-    if not location:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Location not found"
-        )
-    
-    # In production, save to database
-    if request.forwarding_number:
-        location.phone = request.forwarding_number
-        db.commit()
-    
-    return CallSettingsResponse(
-        forwarding_number=request.forwarding_number or location.phone,
-        twilio_number="+1 (555) 999-8765",
-        is_enabled=request.is_enabled if request.is_enabled is not None else True,
-        sms_delay_seconds=request.sms_delay_seconds or 30,
-    )
+    settings = get_call_text_back_service(db).update_settings(location_id, enabled, sms_template)
+    if not settings:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Settings not found")
+    return {
+        "success": True,
+        "enabled": settings.missed_call_sms_enabled,
+        "sms_template": settings.sms_template,
+    }

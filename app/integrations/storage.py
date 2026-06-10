@@ -2,9 +2,15 @@
 
 from typing import Any
 
-import httpx
-
 from app.core.config import settings
+
+
+class StorageClientUnavailableError(RuntimeError):
+    """Raised when report storage is not configured."""
+
+
+class StorageClientUploadError(RuntimeError):
+    """Raised when report storage upload fails."""
 
 
 class StorageClient:
@@ -21,10 +27,16 @@ class StorageClient:
         content_type: str = "application/octet-stream",
     ) -> str:
         """Upload content to S3 and return URL."""
+        if not self.bucket or not self.region:
+            raise StorageClientUnavailableError("S3 storage is not configured for report uploads.")
+
         try:
             import boto3
             from botocore.config import Config
+        except ImportError:
+            raise StorageClientUnavailableError("boto3 is required for S3 report uploads.")
 
+        try:
             config = Config(
                 region_name=self.region,
                 signature_version="s3v4",
@@ -44,12 +56,9 @@ class StorageClient:
                 ContentType=content_type,
             )
 
-            # Return public URL (assumes bucket is configured for public access or use presigned)
             return f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{key}"
-
-        except ImportError:
-            # Fallback for development without boto3
-            return f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{key}"
+        except Exception as exc:
+            raise StorageClientUploadError(str(exc)) from exc
 
     async def get_presigned_url(
         self,
@@ -57,10 +66,16 @@ class StorageClient:
         expires_in: int = 3600,
     ) -> str:
         """Generate a presigned URL for downloading."""
+        if not self.bucket or not self.region:
+            raise StorageClientUnavailableError("S3 storage is not configured for report downloads.")
+
         try:
             import boto3
             from botocore.config import Config
+        except ImportError:
+            raise StorageClientUnavailableError("boto3 is required for S3 report downloads.")
 
+        try:
             config = Config(
                 region_name=self.region,
                 signature_version="s3v4",
@@ -73,23 +88,26 @@ class StorageClient:
                 aws_secret_access_key=settings.aws_secret_access_key,
             )
 
-            url = s3_client.generate_presigned_url(
+            return s3_client.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expires_in,
             )
-
-            return url
-
-        except ImportError:
-            return f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{key}"
+        except Exception as exc:
+            raise StorageClientUploadError(str(exc)) from exc
 
     async def delete(self, key: str) -> None:
         """Delete an object from S3."""
+        if not self.bucket or not self.region:
+            raise StorageClientUnavailableError("S3 storage is not configured for report cleanup.")
+
         try:
             import boto3
             from botocore.config import Config
+        except ImportError:
+            raise StorageClientUnavailableError("boto3 is required for S3 report cleanup.")
 
+        try:
             config = Config(region_name=self.region)
 
             s3_client = boto3.client(
@@ -100,16 +118,21 @@ class StorageClient:
             )
 
             s3_client.delete_object(Bucket=self.bucket, Key=key)
-
-        except ImportError:
-            pass
+        except Exception as exc:
+            raise StorageClientUploadError(str(exc)) from exc
 
     async def list_objects(self, prefix: str) -> list[dict]:
         """List objects with a given prefix."""
+        if not self.bucket or not self.region:
+            raise StorageClientUnavailableError("S3 storage is not configured for report listing.")
+
         try:
             import boto3
             from botocore.config import Config
+        except ImportError:
+            raise StorageClientUnavailableError("boto3 is required for S3 report listing.")
 
+        try:
             config = Config(region_name=self.region)
 
             s3_client = boto3.client(
@@ -125,6 +148,5 @@ class StorageClient:
                 {"key": obj["Key"], "size": obj["Size"], "modified": obj["LastModified"]}
                 for obj in response.get("Contents", [])
             ]
-
-        except ImportError:
-            return []
+        except Exception as exc:
+            raise StorageClientUploadError(str(exc)) from exc

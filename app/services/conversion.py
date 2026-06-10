@@ -356,45 +356,59 @@ class ConversionFunnelService:
         else:
             return {
                 "headline": f"Target +{calls_target}% calls and +{directions_target}% directions vs last month.",
-                "subheadline": "Local SEO Optimizer automatically handles:",
+                "subheadline": "Start with a free preview, then unlock paid workflows when you are ready:",
                 "features": [
-                    "✔ Auto-generate & upload Google Posts",
-                    "✔ Collect & respond to reviews",
-                    "✔ Calls/Directions analytics reports",
-                    "✔ Personalized content recommendations",
+                    "Review your audit and dashboard",
+                    "Check setup, connection, and reporting readiness",
+                    "Choose a paid plan before using AI, SMS, publishing, or automation",
+                    "Stay in control before anything goes live",
                 ],
-                "button_text": "Start Free – 7 Day Trial",
-                "button_subtext": "No credit card required · Cancel anytime",
+                "button_text": "Start 3-Day Free Preview",
+                "button_subtext": "No credit card required. Paid features stay locked until you choose a plan.",
                 "trust_badges": [
-                    "🔒 Data encrypted",
-                    "⭐ 500+ businesses using",
-                    "💬 24/7 support",
+                    "Data encrypted",
+                    "No paid automation during preview",
+                    "Upgrade only when ready",
                 ],
             }
 
     def _get_pricing_info(self, audit: OnboardingAudit) -> dict[str, Any]:
-        """Get pricing information with savings calculation."""
-        recommended_plan = audit.recommended_plan or "starter"
+        """Get managed pilot pricing information for the public sales flow."""
+        recommended_plan = audit.recommended_plan or "maps_starter"
+
+        legacy_plan_map = {
+            "starter": "maps_starter",
+            "pro": "calls_growth",
+            "premium": "calls_growth",
+            "agency": "competitive_market",
+        }
+        recommended_plan = legacy_plan_map.get(recommended_plan, recommended_plan)
 
         plans = {
-            "starter": {
-                "name": "Starter",
-                "price": 149,
+            "maps_starter": {
+                "name": "Maps Starter",
+                "price": 699,
+                "setup_fee": 499,
+                "agency_equivalent": 1299,
+                "positioning": "Best for smaller service businesses in lower-competition markets.",
+            },
+            "calls_growth": {
+                "name": "Calls Growth",
+                "price": 999,
+                "setup_fee": 799,
                 "agency_equivalent": 2000,
+                "positioning": "Best for lead-driven home service businesses that need more calls.",
             },
-            "pro": {
-                "name": "Pro",
-                "price": 299,
-                "agency_equivalent": 3500,
-            },
-            "agency": {
-                "name": "Agency",
-                "price": 599,
-                "agency_equivalent": 5000,
+            "competitive_market": {
+                "name": "Competitive Market",
+                "price": 1499,
+                "setup_fee": 1500,
+                "agency_equivalent": 3000,
+                "positioning": "Best for high-competition cities, high-ticket services, or multi-location operators.",
             },
         }
 
-        plan = plans.get(recommended_plan, plans["starter"])
+        plan = plans.get(recommended_plan, plans["maps_starter"])
         monthly_savings = plan["agency_equivalent"] - plan["price"]
         yearly_savings = monthly_savings * 12
 
@@ -402,10 +416,13 @@ class ConversionFunnelService:
             "recommended_plan": recommended_plan,
             "plan_name": plan["name"],
             "price_monthly": plan["price"],
+            "setup_fee": plan["setup_fee"],
+            "positioning": plan["positioning"],
+            "sales_motion": "managed_3_month_pilot",
             "agency_equivalent": plan["agency_equivalent"],
             "monthly_savings": monthly_savings,
             "yearly_savings": yearly_savings,
-            "savings_message_en": f"Save ${monthly_savings}/month vs agencies (${yearly_savings}/year)",
+            "savings_message_en": f"Save about ${monthly_savings}/month vs heavier agency retainers (${yearly_savings}/year)",
             "savings_message_ko": f"대행사 대비 월 ${monthly_savings} 절약 (연 ${yearly_savings})",
         }
 

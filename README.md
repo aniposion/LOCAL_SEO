@@ -1,239 +1,128 @@
 # Local SEO Optimizer
 
-자동화된 콘텐츠 생성 및 SEO 관리 SaaS for 로컬 비즈니스
+Local SEO Optimizer는 지역 비즈니스의 Google Maps/GBP 운영, 리뷰 응답, 로컬 콘텐츠, missed-call 후속 문자, 리포팅, 결제를 한 흐름으로 묶는 managed local SEO 제품입니다.
 
-## 🎯 Overview
+## 현재 판매 판정
 
-Local SEO Optimizer는 소상공인을 위한 자동화된 SEO 솔루션입니다:
+작성 기준: 2026-05-18
 
-- **콘텐츠 자동 생성**: LLM(Gemini/OpenAI)을 활용한 플랫폼별 최적화 콘텐츠
-- **AI 이미지 생성**: Google AI Studio Imagen 3를 활용한 자동 이미지 생성
-- **승인 워크플로우**: AI 초안 → 카톡/슬랙 알림 → 사장님 승인 → 자동 업로드
-- **멀티 플랫폼 업로드**: Google Business Profile, Instagram, Website(Blog)
-- **성과 분석 & SEO 점수화**: 통합 대시보드 및 자동 추천
-- **주간 리포트**: PDF 생성 및 이메일 발송
-- **구독 결제**: Stripe 연동 플랜별 과금
+- 판매 가능: 5-10개 파일럿 고객 대상 managed 3개월 pilot.
+- 판매 보류: 완전 무인 self-serve SaaS 공개 판매.
+- 이유: 공개 가격, billing catalog, lead funnel, 실패 UX, 운영 runbook은 정렬되었지만 실제 staging/prod secret 주입과 full smoke는 운영 환경에서 완료해야 합니다.
 
-## 🏗️ Architecture
+## 공개 managed pilot 패키지
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      FastAPI Backend                        │
-├─────────────┬─────────────┬─────────────┬─────────────────┤
-│   Auth      │  Content    │  Analytics  │   Billing       │
-│   Router    │  Router     │  Router     │   Router        │
-├─────────────┴─────────────┴─────────────┴─────────────────┤
-│                      Services Layer                         │
-│  ContentService │ PublisherService │ SEOService │ ...      │
-├─────────────────────────────────────────────────────────────┤
-│                    Integrations Layer                       │
-│  LLM Adapter │ GBP Client │ IG Client │ Storage │ Email   │
-├─────────────────────────────────────────────────────────────┤
-│                      Data Layer                             │
-│           PostgreSQL + SQLAlchemy + Alembic                │
-└─────────────────────────────────────────────────────────────┘
-```
+| Package ID | 이름 | 월 가격 | Setup | 판매 motion |
+| --- | --- | ---: | ---: | --- |
+| `maps_starter` | Maps Starter | $699/mo | $499 | 3-month managed pilot |
+| `calls_growth` | Calls Growth | $999/mo | $799 | 3-month managed pilot |
+| `competitive_market` | Competitive Market | $1,499/mo | $1,500 | 3-month managed pilot |
 
-## 🚀 Quick Start
+기존 `starter`, `pro`, `premium`, `agency` self-serve plan은 기존 고객과 내부 호환용 legacy catalog로 유지됩니다.
 
-### Prerequisites
+## 기술 스택
 
-- Python 3.12+
-- PostgreSQL 16+
-- Docker & Docker Compose (optional)
+- Backend: FastAPI, SQLAlchemy, Alembic
+- Frontend: Next.js, React, TypeScript
+- Billing: Stripe Checkout, Stripe Billing Portal, webhook idempotency
+- Integrations: Google Business Profile, Instagram, Twilio, SendGrid, cloud storage
+- Database: PostgreSQL for staging/prod, SQLite only for local/dev tests
 
-### Installation
+## 빠른 시작
+
+Backend:
 
 ```bash
-# Clone repository
-git clone https://github.com/your-org/local-seo-optimizer.git
-cd local-seo-optimizer
-
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
+venv\Scripts\activate
 pip install -r requirements.txt
-
-# Copy environment file
-cp .env.example .env
-# Edit .env with your configuration
-
-# Run database migrations
+copy .env.example .env
 alembic upgrade head
-
-# Start development server
 uvicorn app.main:app --reload
 ```
 
-### Using Docker
+Frontend:
 
 ```bash
-# Start all services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
+cd frontend
+npm install
+npm run dev
 ```
 
-## 📚 API Documentation
+## Production 환경변수
 
-After starting the server, access:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+출시 전 `staging`과 `prod`에 최소한 아래 값을 채워야 합니다.
 
-### Key Endpoints
+- Stripe: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, managed pilot `STRIPE_PRICE_*`
+- Storage: `GCS_BUCKET` 또는 S3 관련 변수
+- Google Business Profile: `GBP_CLIENT_ID`, `GBP_CLIENT_SECRET`
+- Instagram: `IG_APP_ID`, `IG_APP_SECRET`
+- Auth: placeholder가 아닌 `JWT_SECRET`
+- Email: `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`
+- AI: `GEMINI_API_KEY` 또는 `OPENAI_API_KEY`
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/auth/signup` | POST | User registration |
-| `/auth/login` | POST | User authentication |
-| `/auth/verify-email` | POST | Email verification |
-| `/locations` | GET/POST | Manage business locations |
-| `/locations/{id}/channels` | POST | Connect platforms (GBP/IG/Web) |
-| `/oauth/google/authorize` | GET | Google OAuth flow |
-| `/oauth/instagram/authorize` | GET | Instagram OAuth flow |
-| `/content/generate` | POST | Generate content with LLM |
-| `/approval/draft` | POST | Create draft with approval workflow |
-| `/approval/posts/{id}/approve` | POST | Approve content |
-| `/approval/posts/{id}/reject` | POST | Reject content |
-| `/approval/pending` | GET | List pending approvals |
-| `/posts` | GET/POST | Manage posts |
-| `/posts/{id}/publish` | POST | Publish post to platform |
-| `/analytics/summary` | GET | Get analytics summary |
-| `/seo/score` | GET | Get SEO scores |
-| `/billing/plans` | GET | List subscription plans |
-| `/billing/checkout` | POST | Create checkout session |
-| `/reports/weekly` | POST | Generate weekly report |
-
-## 🔧 Configuration
-
-### Environment Variables
-
-```env
-# Application
-APP_ENV=dev|staging|prod
-DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/db
-
-# Authentication
-JWT_SECRET=your-secret-key-min-32-chars
-
-# LLM Provider
-LLM_PROVIDER=gemini|openai
-GEMINI_API_KEY=your-gemini-key
-OPENAI_API_KEY=your-openai-key
-
-# Platform APIs
-GBP_CLIENT_ID=...
-GBP_CLIENT_SECRET=...
-IG_APP_ID=...
-IG_APP_SECRET=...
-
-# AWS (for storage)
-AWS_REGION=us-east-1
-S3_BUCKET=your-bucket
-
-# Stripe (for billing)
-STRIPE_SECRET_KEY=sk_...
-```
-
-## 📅 Scheduled Jobs
-
-| Job | Schedule | Description |
-|-----|----------|-------------|
-| Content Generation | Mon 09:00 UTC | Generate weekly content |
-| Publisher | Mon/Wed/Fri 10:00 UTC | Publish queued posts |
-| Analytics Collection | Daily 01:00 UTC | Collect platform metrics |
-| Weekly Report | Sun 18:00 UTC | Generate & send reports |
-
-## 🧪 Testing
+환경 점검:
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=app --cov-report=html
-
-# Run specific test file
-pytest tests/test_auth.py -v
+python scripts/check_prod_env.py --require-prod
 ```
 
-## 📁 Project Structure
+## 배포 검증
 
-```
-local-seo-optimizer/
-├── app/
-│   ├── core/           # Config, security
-│   ├── db/             # Database setup
-│   ├── models/         # SQLAlchemy models
-│   ├── schemas/        # Pydantic schemas
-│   ├── routers/        # API endpoints
-│   ├── services/       # Business logic
-│   ├── integrations/   # External APIs
-│   ├── workers/        # Scheduled jobs
-│   └── main.py         # FastAPI app
-├── alembic/            # Database migrations
-├── tests/              # Test suite
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-└── README.md
+Migration:
+
+```bash
+alembic upgrade head
 ```
 
-## 🔐 Security
+Production smoke:
 
-- JWT-based authentication with access/refresh tokens
-- Password hashing with bcrypt
-- Environment-based secrets management
-- CORS configuration for production
-
-## 🔄 Approval Workflow
-
-```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  AI 콘텐츠    │───▶│  카톡/슬랙   │───▶│  사장님 승인  │───▶│  자동 업로드  │
-│  초안 생성    │    │  알림 발송   │    │  버튼 클릭   │    │  (예약 가능)  │
-└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
-       │                                       │
-       ▼                                       ▼
-┌──────────────┐                        ┌──────────────┐
-│  AI 이미지    │                        │  거절 시     │
-│  자동 생성    │                        │  수정 요청   │
-└──────────────┘                        └──────────────┘
+```powershell
+scripts/smoke_test_prod.ps1 -Profile full
 ```
 
-### 알림 채널 지원
-- **Slack**: Webhook을 통한 Block Kit 메시지 (승인/거절 버튼 포함)
-- **KakaoTalk**: 알림톡 API 연동
-- **Email**: SMTP를 통한 HTML 이메일
+`-Profile full`은 health/readiness, OAuth, upload, Twilio, Stripe, publish, admin, sales funnel 경로를 확인합니다. 실제 staging/prod URL, 테스트 계정, secret이 필요합니다.
 
-## 📈 Roadmap
+## 주요 API 경로
 
-- [x] OAuth integration (Google, Facebook)
-- [x] Image generation with Imagen 3
-- [x] Approval workflow with notifications
-- [ ] Multi-language support
-- [ ] Agency dashboard
-- [ ] White-label options
-- [ ] Mobile app
+- Public contact funnel: `POST /contact/requests`
+- Admin contact queue: `GET /contact/requests`
+- Admin sales summary: `GET /contact/summary`
+- Public billing plans: `GET /billing/plans`
+- Legacy billing plans: `GET /billing/plans?catalog=legacy`
+- Stripe checkout: `POST /billing/checkout`
+- Stripe webhook canonical route: `POST /webhooks/stripe`
+- Compatibility API prefix: `/api/v1/...`
 
-## 📄 License
+## 검증 명령
 
-MIT License - see [LICENSE](LICENSE) for details.
+Backend:
 
-## 🤝 Contributing
+```bash
+pytest -q
+```
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests
-5. Submit a pull request
+Frontend:
 
----
+```bash
+cd frontend
+npm run lint
+npm run build
+```
 
-Built with ❤️ for local businesses
+## 핵심 문서
+
+- [제품 개선 설계서](docs/PRODUCT_IMPROVEMENT_DESIGN_KR_2026-05-18.md)
+- [제품 판매 readiness 체크리스트](docs/PRODUCT_READINESS_CHECKLIST_KR_2026-05-18.md)
+- [Billing/Support/Incident Runbook](docs/BILLING_SUPPORT_INCIDENT_RUNBOOK_KR_2026-05-18.md)
+- [Deployment Checklist](docs/DEPLOYMENT_CHECKLIST.md)
+- [GCP Bootstrap Checklist](docs/GCP_BOOTSTRAP_CHECKLIST_KR_2026-04-01.md)
+
+## Release branch 정리 원칙
+
+현재 worktree에는 기존 변경과 untracked 파일이 많습니다. release branch 정리는 다음 원칙으로 진행합니다.
+
+1. 기존 변경을 임의로 되돌리지 않습니다.
+2. 이번 개선 범위의 변경 파일만 분리해 검토합니다.
+3. generated/cache/local artifact는 별도 승인 후 정리합니다.
+4. destructive cleanup은 `git status --short` 검토 후 사용자 승인 없이 실행하지 않습니다.

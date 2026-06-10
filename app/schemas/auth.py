@@ -54,7 +54,7 @@ class TokenResponse(BaseModel):
     """JWT token response."""
 
     access_token: str
-    refresh_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
     expires_in: int = Field(description="Access token expiration in seconds")
 
@@ -62,7 +62,7 @@ class TokenResponse(BaseModel):
 class RefreshRequest(BaseModel):
     """Token refresh request."""
 
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class PasswordChangeRequest(BaseModel):

@@ -1,7 +1,7 @@
 """Content approval workflow service."""
 
-import secrets
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -13,10 +13,23 @@ from app.models.account import Account
 from app.models.location import Location
 from app.models.post import Platform, Post, PostStatus
 from app.services.content import ContentService
+from app.services.credits import CreditsService
 from app.services.image_generation import ImageGenerationService, ImagePromptBuilder
 from app.services.notification import NotificationChannel, NotificationService
 
 logger = logging.getLogger(__name__)
+
+
+class ApprovalUsageLimitError(RuntimeError):
+    """Raised when approval workflow usage exceeds the account limit."""
+
+    def __init__(self, detail: dict[str, Any]):
+        super().__init__(detail.get("message") or "Approval usage limit exceeded")
+        self.detail = detail
+
+
+class ApprovalGenerationUnavailableError(RuntimeError):
+    """Raised when approval draft generation returns no usable platform content."""
 
 
 class ApprovalWorkflowService:
@@ -27,6 +40,49 @@ class ApprovalWorkflowService:
         self.content_service = ContentService()
         self.image_service = ImageGenerationService(db)
         self.notification_service = NotificationService(db)
+
+    def _preview_usage(self, account_id: UUID, usage_type: str, count: int = 1) -> None:
+        result = CreditsService(self.db).preview_usage(str(account_id), usage_type, count)
+        if result.get("allowed"):
+            return
+
+        raise ApprovalUsageLimitError(
+            {
+                "error": "Rate limit exceeded",
+                "usage_type": usage_type,
+                "message": result.get("reason"),
+                "remaining_daily": result.get("remaining_daily", 0),
+                "remaining_monthly": result.get("remaining_monthly", 0),
+                "cooldown_seconds": result.get("cooldown_remaining_seconds", 0),
+                "overage_available": result.get("overage_available", False),
+                "overage_cost_cents": result.get("overage_cost_cents", 0),
+            }
+        )
+
+    def _record_usage(self, account_id: UUID, usage_type: str, count: int = 1) -> None:
+        result = CreditsService(self.db).use_credits(str(account_id), usage_type, count)
+        if result.get("allowed"):
+            return
+
+        logger.warning(
+            "Approval workflow usage record failed after successful %s generation for account %s: %s",
+            usage_type,
+            account_id,
+            result.get("reason"),
+        )
+
+    def _collect_platform_posts(
+        self,
+        generated_content: Any,
+        platform_targets: list[str],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Return only platforms that produced usable content."""
+        posts: list[tuple[str, dict[str, Any]]] = []
+        for platform in platform_targets:
+            post_data = self._extract_platform_content(generated_content, platform)
+            if post_data:
+                posts.append((platform, post_data))
+        return posts
 
     async def create_draft_with_approval(
         self,
@@ -65,6 +121,10 @@ class ApprovalWorkflowService:
 
         platform_targets = platform_targets or ["GBP", "INSTAGRAM", "WEBSITE"]
 
+        self._preview_usage(account_id, "ai_content", 1)
+        if generate_image:
+            self._preview_usage(account_id, "ai_image", 1)
+
         # Step 1: Generate content using AI
         logger.info(f"Generating content for location {location.name}")
         generated_content = await self.content_service.generate(
@@ -78,15 +138,21 @@ class ApprovalWorkflowService:
             promo=promo,
         )
 
+        generated_posts = self._collect_platform_posts(generated_content, platform_targets)
+        if not generated_posts:
+            raise ApprovalGenerationUnavailableError(
+                "AI content provider is unavailable."
+            )
+
         # Step 2: Generate image if requested
         image_url = None
         if generate_image and generated_content.image_prompt:
             logger.info("Generating AI image")
             try:
-                # 비즈니스 타입 추출 (location 카테고리 또는 서비스에서)
+                # Derive a business type hint from the requested services.
                 business_type = services[0] if services else "local business"
 
-                # 이미지 프롬프트 향상
+                # Build a richer prompt for local-business style images.
                 enhanced_prompt = ImagePromptBuilder.build_local_business_prompt(
                     business_type=business_type,
                     service=theme,
@@ -94,7 +160,7 @@ class ApprovalWorkflowService:
                     mood="welcoming",
                 )
 
-                # 원본 프롬프트와 결합
+                # Combine the model-provided prompt with the local-business context.
                 final_prompt = f"{generated_content.image_prompt}. {enhanced_prompt}"
 
                 image_url = await self.image_service.generate_and_upload(
@@ -102,20 +168,18 @@ class ApprovalWorkflowService:
                     image_size="1K",  # 1K resolution
                     style=image_style,
                 )
+                if image_url:
+                    self._record_usage(account_id, "ai_image", 1)
                 logger.info(f"Image generated: {image_url}")
             except Exception as e:
                 logger.error(f"Image generation failed: {e}")
-                # 이미지 생성 실패해도 계속 진행
+                # Continue without an image if generation fails.
 
         # Step 3: Create posts with PENDING_APPROVAL status
         created_posts = []
 
-        for platform in platform_targets:
-            post_data = self._extract_platform_content(generated_content, platform)
-            if not post_data:
-                continue
-
-            # 승인 토큰 생성
+        for platform, post_data in generated_posts:
+            # Generate a token for approve/reject actions.
             approval_token = secrets.token_urlsafe(32)
 
             post = Post(
@@ -143,6 +207,8 @@ class ApprovalWorkflowService:
             created_posts.append(post)
 
         self.db.commit()
+        if created_posts:
+            self._record_usage(account_id, "ai_content", 1)
 
         # Step 4: Send notification for each post
         notification_results = []
@@ -219,7 +285,7 @@ class ApprovalWorkflowService:
         post.status = PostStatus.APPROVED if not schedule_at else PostStatus.QUEUED
         post.approved_at = datetime.now(timezone.utc)
         post.approved_by_id = approver_id
-        post.approval_token = None  # 토큰 무효화
+        post.approval_token = None  # Invalidate the token after approval.
 
         if schedule_at:
             post.scheduled_at = schedule_at
@@ -338,7 +404,7 @@ class ApprovalWorkflowService:
         rejected = base_query.filter(Post.status == PostStatus.REJECTED).count()
         posted = base_query.filter(Post.status == PostStatus.POSTED).count()
 
-        # 평균 승인 시간 계산
+        # Average time from approval request to approval.
         avg_approval_time = (
             self.db.query(func.avg(Post.approved_at - Post.approval_requested_at))
             .join(Location)

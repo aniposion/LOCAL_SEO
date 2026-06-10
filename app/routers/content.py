@@ -1,7 +1,7 @@
 """Content generation router."""
 
+import logging
 from datetime import date
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,16 +14,17 @@ from app.models.location import Location
 from app.models.post import Platform, Post, PostStatus
 from app.routers.deps import get_current_user
 from app.schemas.content import ContentGenerateRequest, ContentGenerateResponse
+from app.services.credits import CreditsService
 from app.services.content import ContentService
 from app.services.content_suggestions import ContentSuggestionService
 
 router = APIRouter(prefix="/content", tags=["content"])
+logger = logging.getLogger(__name__)
 
-
-# ============ Schemas for Suggestions ============
 
 class ContentSuggestion(BaseModel):
     """A content topic suggestion."""
+
     id: str
     type: str
     emoji: str
@@ -34,11 +35,55 @@ class ContentSuggestion(BaseModel):
 
 class ContentSuggestionsResponse(BaseModel):
     """Response with content suggestions."""
+
     suggestions: list[ContentSuggestion]
     message: str
 
 
-# ============ Suggestion Endpoints (Multiple Choice UX) ============
+def _require_owned_location(db: Session, location_id: UUID, account_id: UUID) -> Location:
+    location = (
+        db.query(Location)
+        .filter(Location.id == location_id, Location.account_id == account_id)
+        .first()
+    )
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Location not found",
+        )
+    return location
+
+
+def _preview_content_usage(db: Session, account_id: UUID) -> None:
+    result = CreditsService(db).preview_usage(str(account_id), "ai_content", 1)
+    if result.get("allowed"):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "error": "Rate limit exceeded",
+            "message": result.get("reason"),
+            "remaining_daily": result.get("remaining_daily", 0),
+            "remaining_monthly": result.get("remaining_monthly", 0),
+            "cooldown_seconds": result.get("cooldown_remaining_seconds", 0),
+            "overage_available": result.get("overage_available", False),
+            "overage_cost_cents": result.get("overage_cost_cents", 0),
+        },
+    )
+
+
+def _record_content_usage(db: Session, account_id: UUID) -> None:
+    result = CreditsService(db).use_credits(str(account_id), "ai_content", 1)
+    if result.get("allowed"):
+        return
+
+    logger.warning(
+        "Content usage record failed after successful response for account %s: %s",
+        account_id,
+        result.get("reason"),
+    )
+
 
 @router.get("/suggestions", response_model=ContentSuggestionsResponse)
 async def get_content_suggestions(
@@ -48,29 +93,17 @@ async def get_content_suggestions(
     db: Session = Depends(get_db),
     current_user: Account = Depends(get_current_user),
 ):
-    """
-    Get content topic suggestions for multiple-choice selection.
-    
-    사장님들은 프롬프트를 입력할 줄 모릅니다.
-    UX는 무조건 객관식(Multiple Choice)이어야 합니다.
-    
-    Returns a list of suggested topics based on:
-    - Current weather
-    - Seasonal events (Halloween, Christmas, etc.)
-    - Day of week
-    - Business category
-    """
+    """Get multiple-choice content suggestions for the current user."""
     category = None
-    
-    # Get category from location if provided
+
     if location_id:
         location = db.query(Location).filter(
             Location.id == location_id,
             Location.account_id == current_user.id,
         ).first()
         if location:
-            category = location.category
-    
+            category = getattr(location, "category", None)
+
     suggestion_service = ContentSuggestionService()
     suggestions = suggestion_service.get_suggestions(
         category=category,
@@ -78,10 +111,10 @@ async def get_content_suggestions(
         target_date=date.today(),
         limit=limit,
     )
-    
+
     return ContentSuggestionsResponse(
-        suggestions=[ContentSuggestion(**s) for s in suggestions],
-        message="이번 주 프로모션 주제를 골라주세요:",
+        suggestions=[ContentSuggestion(**suggestion) for suggestion in suggestions],
+        message="Select a suggested topic to generate content faster.",
     )
 
 
@@ -92,38 +125,21 @@ async def generate_from_suggestion(
     db: Session = Depends(get_db),
     current_user: Account = Depends(get_current_user),
 ):
-    """
-    Generate content from a selected suggestion.
-    
-    This is the "원클릭 생성" endpoint.
-    User selects a suggestion, we generate the content automatically.
-    """
-    # Verify location ownership
-    location = db.query(Location).filter(
-        Location.id == location_id,
-        Location.account_id == current_user.id,
-    ).first()
-    
-    if not location:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Location not found",
-        )
-    
-    # Get the suggestion
+    """Generate a draft post from a selected suggestion."""
+    location = _require_owned_location(db, location_id, current_user.id)
+
     suggestion_service = ContentSuggestionService()
     suggestion = suggestion_service.get_suggestion_by_id(suggestion_id)
-    
+
     if not suggestion:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid suggestion ID",
         )
-    
-    # Build prompt from suggestion
+
     prompt_theme = suggestion.get("title_en", "weekly update")
-    
-    # Generate content
+    _preview_content_usage(db, current_user.id)
+
     content_service = ContentService()
     generated = await content_service.generate(
         location=location,
@@ -131,10 +147,9 @@ async def generate_from_suggestion(
         services=location.services or [],
         tone="friendly and professional",
         language="en",
-        platform_targets=["GBP"],  # Default to GBP
+        platform_targets=["GBP"],
     )
-    
-    # Create draft post
+
     if generated.gbp:
         post = Post(
             location_id=location.id,
@@ -152,7 +167,8 @@ async def generate_from_suggestion(
         db.add(post)
         db.commit()
         db.refresh(post)
-        
+        _record_content_usage(db, current_user.id)
+
         return {
             "success": True,
             "post_id": str(post.id),
@@ -162,12 +178,12 @@ async def generate_from_suggestion(
                 "body": generated.gbp.body,
                 "cta": generated.gbp.cta,
             },
-            "message": "콘텐츠가 생성되었습니다! 승인 후 자동으로 업로드됩니다.",
+            "message": "Draft created from the selected suggestion.",
         }
-    
+
     raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Failed to generate content",
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="AI content provider is unavailable.",
     )
 
 
@@ -177,17 +193,10 @@ async def generate_content(
     db: Session = Depends(get_db),
     current_user: Account = Depends(get_current_user),
 ) -> ContentGenerateResponse:
-    """Generate content for all target platforms."""
-    # Verify location ownership
-    location = (
-        db.query(Location)
-        .filter(Location.id == request.location_id, Location.account_id == current_user.id)
-        .first()
-    )
-    if not location:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+    """Generate content for the requested platforms."""
+    location = _require_owned_location(db, request.location_id, current_user.id)
+    _preview_content_usage(db, current_user.id)
 
-    # Generate content using LLM
     content_service = ContentService()
     generated = await content_service.generate(
         location=location,
@@ -200,7 +209,6 @@ async def generate_content(
         promo=request.promo,
     )
 
-    # Create draft posts
     posts_created = 0
     platform_map = {
         "GBP": (Platform.GBP, generated.gbp),
@@ -217,7 +225,9 @@ async def generate_content(
                     platform=platform,
                     status=PostStatus.DRAFT,
                     title=getattr(content, "title", None),
-                    body=getattr(content, "body", None) or getattr(content, "caption", None) or getattr(content, "markdown", None),
+                    body=getattr(content, "body", None)
+                    or getattr(content, "caption", None)
+                    or getattr(content, "markdown", None),
                     hashtags=getattr(content, "hashtags", None),
                     image_prompt=generated.image_prompt,
                     generated_by=content_service.model_name,
@@ -231,6 +241,13 @@ async def generate_content(
                 posts_created += 1
 
     db.commit()
+    if posts_created == 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI content provider is unavailable.",
+        )
+
+    _record_content_usage(db, current_user.id)
 
     return ContentGenerateResponse(
         location_id=location.id,

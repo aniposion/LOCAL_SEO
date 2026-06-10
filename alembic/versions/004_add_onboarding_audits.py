@@ -19,20 +19,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create onboarding status enum
-    op.execute("""
-        CREATE TYPE onboardingstatus AS ENUM (
-            'pending', 'searching', 'analyzing', 'completed', 'failed'
-        )
-    """)
-
-    # Create audit grade enum
-    op.execute("""
-        CREATE TYPE auditgrade AS ENUM (
-            'A+', 'A', 'B+', 'B', 'B-', 'C+', 'C', 'D', 'F'
-        )
-    """)
-
     # Create onboarding_audits table
     op.create_table(
         'onboarding_audits',
@@ -87,7 +73,7 @@ def upgrade() -> None:
         # Scores
         sa.Column('total_score', sa.Float),
         sa.Column('grade', sa.Enum('A+', 'A', 'B+', 'B', 'B-', 'C+', 'C', 'D', 'F', 
-                                   name='auditgrade', create_type=False)),
+                                   name='auditgrade')),
         sa.Column('review_score', sa.Float),
         sa.Column('activity_score', sa.Float),
         sa.Column('completeness_score', sa.Float),
@@ -102,7 +88,7 @@ def upgrade() -> None:
         
         # Status
         sa.Column('status', sa.Enum('pending', 'searching', 'analyzing', 'completed', 'failed',
-                                    name='onboardingstatus', create_type=False),
+                                    name='onboardingstatus'),
                   default='pending'),
         sa.Column('error_message', sa.Text),
         

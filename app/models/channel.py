@@ -2,7 +2,7 @@
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
@@ -96,18 +96,28 @@ class Channel(BaseModel):
         from app.core.encryption import decrypt_credentials
         return decrypt_credentials(self.credentials_encrypted)
 
+    @staticmethod
+    def _normalize_token_expiry(value: datetime | None) -> datetime | None:
+        """Normalize token expiry timestamps to UTC-aware datetimes."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     @property
     def is_token_expired(self) -> bool:
         """Check if access token is expired."""
-        if not self.access_token_expires_at:
+        expires_at = self._normalize_token_expiry(self.access_token_expires_at)
+        if not expires_at:
             return False
-        return datetime.now(self.access_token_expires_at.tzinfo) >= self.access_token_expires_at
+        return datetime.now(timezone.utc) >= expires_at
 
     @property
     def needs_refresh(self) -> bool:
         """Check if token needs refresh (expires within 5 minutes)."""
-        if not self.access_token_expires_at:
+        expires_at = self._normalize_token_expiry(self.access_token_expires_at)
+        if not expires_at:
             return False
-        from datetime import timedelta, timezone
         buffer = timedelta(minutes=5)
-        return datetime.now(timezone.utc) >= (self.access_token_expires_at - buffer)
+        return datetime.now(timezone.utc) >= (expires_at - buffer)

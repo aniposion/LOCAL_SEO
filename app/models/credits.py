@@ -6,10 +6,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import BaseModel
+from app.db.base import BaseModel, UUID
 
 if TYPE_CHECKING:
     from app.models.account import Account
@@ -39,7 +38,7 @@ class CreditBalance(BaseModel):
     __tablename__ = "credit_balances"
     
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        UUID(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         unique=True,
         index=True,
@@ -105,14 +104,18 @@ class CreditTransaction(BaseModel):
     __tablename__ = "credit_transactions"
     
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        UUID(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         index=True,
     )
     
     # Transaction details
     type: Mapped[CreditTransactionType] = mapped_column(
-        Enum(CreditTransactionType), nullable=False
+        Enum(
+            CreditTransactionType,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        nullable=False,
     )
     amount: Mapped[int] = mapped_column(Integer, nullable=False)  # Positive = add, Negative = deduct
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -126,20 +129,94 @@ class CreditTransaction(BaseModel):
     
     # Admin who performed the action (if applicable)
     admin_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
+        UUID(), nullable=True
     )
     
     def __repr__(self) -> str:
         return f"<CreditTransaction {self.type.value}: {self.amount}>"
 
 
+class CreditPurchaseStatus(str, enum.Enum):
+    """Status of a credit purchase order."""
+
+    PENDING = "pending"       # Checkout session created, awaiting payment
+    COMPLETED = "completed"   # Payment confirmed, credits applied
+    CANCELED = "canceled"     # User abandoned checkout or payment failed
+    EXPIRED = "expired"       # Session expired before payment
+    REFUNDED = "refunded"     # Payment refunded, credits clawed back
+
+
+# Credit packages: (credits, price_cents, label)
+CREDIT_PACKAGES: dict[str, tuple[int, int, str]] = {
+    "credits_50":  (50,  499,  "50 Credits Pack"),
+    "credits_100": (100, 899,  "100 Credits Pack"),
+    "credits_250": (250, 1999, "250 Credits Pack"),
+    "credits_500": (500, 3499, "500 Credits Pack"),
+}
+
+
+class CreditPurchaseOrder(BaseModel):
+    """Pending / completed credit purchase order.
+
+    Created when a user initiates a credit checkout session.
+    Credits are applied ONLY after ``checkout.session.completed`` webhook
+    confirms payment – never before.
+    """
+
+    __tablename__ = "credit_purchase_orders"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    # Stripe checkout session ID (unique per order)
+    stripe_session_id: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True
+    )
+
+    # Credit package details captured at order creation
+    package_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    credits_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    status: Mapped[CreditPurchaseStatus] = mapped_column(
+        Enum(
+            CreditPurchaseStatus,
+            values_callable=lambda cls: [m.value for m in cls],
+        ),
+        nullable=False,
+        default=CreditPurchaseStatus.PENDING,
+        index=True,
+    )
+
+    # Filled in from the webhook payload after payment confirmation
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refunded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Relationships
+    account: Mapped["Account"] = relationship("Account", backref="credit_purchase_orders")
+
+    def __repr__(self) -> str:
+        return f"<CreditPurchaseOrder {self.package_id} {self.status.value}>"
+
+
 class UsageRecord(BaseModel):
     """Daily usage tracking for rate limiting."""
-    
+
     __tablename__ = "usage_records"
     
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        UUID(),
         ForeignKey("accounts.id", ondelete="CASCADE"),
         index=True,
     )

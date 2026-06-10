@@ -15,6 +15,10 @@ from app.models.onboarding import AuditGrade, OnboardingAudit, OnboardingStatus
 logger = logging.getLogger(__name__)
 
 
+class PlacesIntegrationUnavailableError(RuntimeError):
+    """Raised when Google Places is not configured or unavailable."""
+
+
 class PlacesSearchService:
     """Service for searching businesses via Google Places API."""
 
@@ -33,9 +37,9 @@ class PlacesSearchService:
         Returns list of matching places.
         """
         if not self.api_key or settings.app_env == "dev":
-            # Return mock data for development
-            logger.info("Using mock data for business search (dev mode)")
-            return self._get_mock_candidates(business_name, address)
+            raise PlacesIntegrationUnavailableError(
+                "Google Places integration is unavailable."
+            )
 
         query = f"{business_name} {address}"
 
@@ -74,9 +78,9 @@ class PlacesSearchService:
     async def get_place_details(self, place_id: str) -> dict[str, Any] | None:
         """Get detailed information for a specific place."""
         if not self.api_key or settings.app_env == "dev":
-            # Return mock data for development
-            logger.info("Using mock data for place details (dev mode)")
-            return self._get_mock_place_details(place_id)
+            raise PlacesIntegrationUnavailableError(
+                "Google Places integration is unavailable."
+            )
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
@@ -141,9 +145,9 @@ class PlacesSearchService:
     ) -> list[dict[str, Any]]:
         """Search for nearby competitors in the same category."""
         if not self.api_key or settings.app_env == "dev":
-            # Return mock data for development
-            logger.info("Using mock data for competitors (dev mode)")
-            return self._get_mock_competitors(category)
+            raise PlacesIntegrationUnavailableError(
+                "Google Places integration is unavailable."
+            )
 
         # Map category to Google Places type
         place_type = self._category_to_type(category)
@@ -208,57 +212,6 @@ class PlacesSearchService:
         }
         return mapping.get(category, "establishment")
 
-    def _get_mock_candidates(self, business_name: str, address: str) -> list[dict[str, Any]]:
-        """Return mock business candidates for development."""
-        import uuid
-        return [
-            {
-                "place_id": f"mock_place_{uuid.uuid4().hex[:8]}",
-                "name": business_name,
-                "address": address,
-                "rating": 4.2,
-                "review_count": 47,
-                "types": ["cafe", "restaurant", "food"],
-                "location": {"lat": 40.7128, "lng": -74.0060},
-                "photos": 8,
-            }
-        ]
-
-    def _get_mock_place_details(self, place_id: str) -> dict[str, Any]:
-        """Return mock place details for development."""
-        from datetime import timedelta
-        return {
-            "place_id": place_id,
-            "name": "Test Business",
-            "address": "123 Main Street, New York, NY 10001",
-            "phone": "+1 (555) 123-4567",
-            "website": "https://testbusiness.com",
-            "rating": 4.2,
-            "review_count": 47,
-            "reviews": [
-                {"author_name": "John D.", "rating": 5, "text": "Great service!", "time": int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())},
-                {"author_name": "Jane S.", "rating": 4, "text": "Good experience", "time": int((datetime.now(timezone.utc) - timedelta(days=10)).timestamp())},
-            ],
-            "latest_review_date": datetime.now(timezone.utc) - timedelta(days=3),
-            "photo_count": 8,
-            "has_hours": True,
-            "types": ["cafe", "restaurant", "food"],
-            "category": "cafe",
-            "location": {"lat": 40.7128, "lng": -74.0060},
-            "maps_url": "https://maps.google.com/?cid=123456789",
-        }
-
-    def _get_mock_competitors(self, category: str) -> list[dict[str, Any]]:
-        """Return mock competitors for development."""
-        return [
-            {"place_id": "comp_1", "name": "Competitor Coffee A", "rating": 4.5, "review_count": 120, "address": "456 Oak St"},
-            {"place_id": "comp_2", "name": "Competitor Coffee B", "rating": 4.3, "review_count": 85, "address": "789 Pine St"},
-            {"place_id": "comp_3", "name": "Competitor Coffee C", "rating": 4.1, "review_count": 62, "address": "321 Elm St"},
-            {"place_id": "comp_4", "name": "Competitor Coffee D", "rating": 3.9, "review_count": 45, "address": "654 Maple St"},
-            {"place_id": "comp_5", "name": "Competitor Coffee E", "rating": 4.0, "review_count": 38, "address": "987 Cedar St"},
-        ]
-
-
 class OnboardingAuditService:
     """Service for running onboarding audits."""
 
@@ -268,13 +221,14 @@ class OnboardingAuditService:
 
     async def start_onboarding(
         self,
-        account_id: UUID,
+        account_id: UUID | None,
         business_name: str,
         address: str,
         city: str | None = None,
         state: str | None = None,
         phone: str | None = None,
         website_url: str | None = None,
+        contact_email: str | None = None,
     ) -> OnboardingAudit:
         """
         Start the onboarding process for a new user.
@@ -283,6 +237,7 @@ class OnboardingAuditService:
         # Create audit record
         audit = OnboardingAudit(
             account_id=account_id,
+            contact_email=contact_email,
             business_name=business_name,
             address=address,
             city=city,
@@ -324,10 +279,16 @@ class OnboardingAuditService:
         if audit.state:
             full_address += f", {audit.state}"
 
-        candidates = await self.places_service.search_business(
-            audit.business_name,
-            full_address,
-        )
+        try:
+            candidates = await self.places_service.search_business(
+                audit.business_name,
+                full_address,
+            )
+        except PlacesIntegrationUnavailableError as exc:
+            audit.status = OnboardingStatus.FAILED
+            audit.error_message = str(exc)
+            self.db.commit()
+            return []
 
         audit.place_candidates = candidates
 
@@ -359,7 +320,13 @@ class OnboardingAuditService:
         self.db.commit()
 
         # Get detailed place info
-        details = await self.places_service.get_place_details(place_id)
+        try:
+            details = await self.places_service.get_place_details(place_id)
+        except PlacesIntegrationUnavailableError as exc:
+            audit.status = OnboardingStatus.FAILED
+            audit.error_message = str(exc)
+            self.db.commit()
+            return audit
 
         if not details:
             audit.status = OnboardingStatus.FAILED
@@ -384,11 +351,17 @@ class OnboardingAuditService:
 
         # Search competitors
         if audit.latitude and audit.longitude:
-            competitors = await self.places_service.search_competitors(
-                audit.latitude,
-                audit.longitude,
-                audit.category,
-            )
+            try:
+                competitors = await self.places_service.search_competitors(
+                    audit.latitude,
+                    audit.longitude,
+                    audit.category,
+                )
+            except PlacesIntegrationUnavailableError as exc:
+                audit.status = OnboardingStatus.FAILED
+                audit.error_message = str(exc)
+                self.db.commit()
+                return audit
 
             # Filter out the business itself
             competitors = [
@@ -608,13 +581,13 @@ class OnboardingAuditService:
                 "action": "Update your business hours on Google Business Profile.",
             })
 
-        if audit.photo_count < 10:
+        if (audit.photo_count or 0) < 10:
             recommendations.append({
                 "priority": 2,
                 "category": "completeness",
                 "status": "warning",
                 "title": "Add More Photos",
-                "description": f"You have only {audit.photo_count} photos. Businesses with 10+ photos get more clicks.",
+                "description": f"You have only {audit.photo_count or 0} photos. Businesses with 10+ photos get more clicks.",
                 "action": "Upload high-quality photos of your business, products, and team.",
             })
 
@@ -648,12 +621,18 @@ class OnboardingAuditService:
             audit.summary = "Your Google Maps presence is in good shape! Focus on maintaining regular activity and encouraging more reviews to stay ahead of competitors."
 
         # Recommend plan
-        if audit.total_score < 50:
-            audit.recommended_plan = "pro"  # Needs more help
+        review_gap = 0
+        if audit.competitor_avg_reviews:
+            review_gap = max(0, int(audit.competitor_avg_reviews - audit.review_count))
+
+        if audit.competition_score < 45 and review_gap >= 50:
+            audit.recommended_plan = "competitive_market"
+        elif audit.total_score < 50:
+            audit.recommended_plan = "calls_growth"
         elif audit.total_score < 70:
-            audit.recommended_plan = "starter"
+            audit.recommended_plan = "maps_starter"
         else:
-            audit.recommended_plan = "starter"  # Maintenance mode
+            audit.recommended_plan = "maps_starter"  # Maintenance mode
 
     async def _check_instagram(self, business_name: str) -> bool:
         """Check if business has Instagram presence (basic check)."""

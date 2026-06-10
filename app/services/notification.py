@@ -11,7 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.account import Account
+from app.models.notification import NotificationDeliveryLog, NotificationEvent
 from app.models.post import Post
+from app.services.credits import CreditsService
+from app.services.email_service import EmailDeliveryError, EmailService, EmailUnavailableError
+from app.services.twilio_service import (
+    TwilioDeliveryError,
+    TwilioUnavailableError,
+    get_twilio_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +30,15 @@ class NotificationChannel(str, Enum):
     KAKAO = "kakao"
     SLACK = "slack"
     EMAIL = "email"
-    SMS = "sms"  # Twilio SMS
+    SMS = "sms"
+
+
+class NotificationSMSLimitError(RuntimeError):
+    """Raised when an SMS notification exceeds usage limits."""
+
+    def __init__(self, detail: dict[str, Any]):
+        super().__init__(detail.get("message") or "SMS notification limit exceeded")
+        self.detail = detail
 
 
 class NotificationService:
@@ -30,6 +46,208 @@ class NotificationService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
+
+    def _preview_sms_usage(self, account_id: UUID) -> None:
+        result = CreditsService(self.db).preview_usage(str(account_id), "sms", 1)
+        if result.get("allowed"):
+            return
+
+        raise NotificationSMSLimitError(
+            {
+                "error": "Rate limit exceeded",
+                "message": result.get("reason"),
+                "remaining_daily": result.get("remaining_daily", 0),
+                "remaining_monthly": result.get("remaining_monthly", 0),
+                "cooldown_seconds": result.get("cooldown_remaining_seconds", 0),
+                "overage_available": result.get("overage_available", False),
+                "overage_cost_cents": result.get("overage_cost_cents", 0),
+            }
+        )
+
+    def _record_sms_usage(self, account_id: UUID) -> None:
+        result = CreditsService(self.db).use_credits(str(account_id), "sms", 1)
+        if result.get("allowed"):
+            return
+
+        logger.warning(
+            "SMS notification usage record failed after successful send for account %s: %s",
+            account_id,
+            result.get("reason"),
+        )
+
+    def _persist_notification_event(
+        self,
+        *,
+        account_id: UUID,
+        notification_type: str,
+        title: str,
+        message: str,
+        url: str | None = None,
+    ) -> NotificationEvent | None:
+        """Persist one inbox event for a generic notification."""
+        try:
+            event = NotificationEvent(
+                account_id=account_id,
+                type=notification_type,
+                title=title,
+                body=message,
+                url=url,
+                read=False,
+            )
+            self.db.add(event)
+            self.db.commit()
+            self.db.refresh(event)
+            return event
+        except Exception as exc:
+            logger.warning("Failed to persist notification event for %s: %s", account_id, exc)
+            self.db.rollback()
+            return None
+
+    async def send_notification(
+        self,
+        account_id: UUID,
+        title: str,
+        message: str,
+        notification_type: str,
+        data: dict[str, Any] | None = None,
+        channel_override: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a generic notification using the account's preferred channel."""
+        account = self.db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            logger.warning("Notification target account not found: %s", account_id)
+            return {"success": False, "error": "account_not_found"}
+
+        channel_pref = (channel_override or account.notification_channel or "email").lower()
+        text_body = f"{title}\n\n{message}"
+        data = data or {}
+        event = self._persist_notification_event(
+            account_id=account_id,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            url=data.get("url") if isinstance(data.get("url"), str) else None,
+        )
+        notification_event_id = event.id if event else None
+
+        try:
+            if channel_pref == "sms" and account.phone:
+                result = await self.send_sms(account.phone, text_body[:1000], account_id=account.id)
+            elif channel_pref == "both":
+                email_result = await self.send_email(
+                    to_email=account.email,
+                    subject=title,
+                    html_body=f"<h2>{title}</h2><p>{message.replace(chr(10), '<br>')}</p>",
+                    text_body=text_body,
+                )
+                sms_result = (
+                    await self.send_sms(account.phone, text_body[:1000], account_id=account.id)
+                    if account.phone
+                    else {"success": False}
+                )
+                result = {
+                    "success": bool(email_result.get("success") or sms_result.get("success")),
+                    "email": email_result,
+                    "sms": sms_result,
+                }
+            elif channel_pref == "slack":
+                if settings.slack_webhook_url:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            settings.slack_webhook_url,
+                            json={"text": f"{title}\n{message}"},
+                        )
+                    result = {"success": response.status_code == 200}
+                else:
+                    result = {"success": False, "error": "slack_not_configured"}
+            else:
+                result = await self.send_email(
+                    to_email=account.email,
+                    subject=title,
+                    html_body=f"<h2>{title}</h2><p>{message.replace(chr(10), '<br>')}</p>",
+                    text_body=text_body,
+                )
+        except Exception as e:
+            logger.error("Generic notification failed for %s: %s", account_id, e)
+            self._write_delivery_log(
+                account_id=account_id,
+                channel=channel_pref,
+                delivery_status="failed",
+                failure_reason=str(e),
+                notification_event_id=notification_event_id,
+            )
+            return {"success": False, "error": str(e), "type": notification_type, "data": data}
+
+        self._write_delivery_log(
+            account_id=account_id,
+            channel=channel_pref,
+            delivery_status="delivered" if result.get("success") else "failed",
+            failure_reason=result.get("error"),
+            notification_event_id=notification_event_id,
+        )
+        return {"type": notification_type, "data": data, **result}
+
+    def _write_delivery_log(
+        self,
+        account_id: UUID,
+        channel: str,
+        delivery_status: str,
+        failure_reason: str | None = None,
+        notification_event_id: UUID | None = None,
+    ) -> None:
+        """Persist a delivery audit record. Failures here are non-fatal."""
+        try:
+            now = datetime.now(timezone.utc)
+            log = NotificationDeliveryLog(
+                account_id=account_id,
+                notification_event_id=notification_event_id,
+                channel=channel,
+                delivery_status=delivery_status,
+                failure_reason=failure_reason,
+                attempted_at=now,
+                delivered_at=now if delivery_status == "delivered" else None,
+            )
+            self.db.add(log)
+            self.db.commit()
+        except Exception as exc:
+            logger.warning("Failed to write delivery log for %s: %s", account_id, exc)
+            self.db.rollback()
+
+    def send_inbox_notification(
+        self,
+        *,
+        account_id: UUID,
+        title: str,
+        message: str,
+        notification_type: str,
+        url: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist an inbox-only notification and its delivery audit row."""
+        event = self._persist_notification_event(
+            account_id=account_id,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            url=url,
+        )
+        if event is None:
+            return {
+                "success": False,
+                "error": "notification_persist_failed",
+                "type": notification_type,
+            }
+
+        self._write_delivery_log(
+            account_id=account_id,
+            channel="inbox",
+            delivery_status="delivered",
+            notification_event_id=event.id,
+        )
+        return {
+            "success": True,
+            "notification_id": str(event.id),
+            "type": notification_type,
+        }
 
     async def send_approval_request(
         self,
@@ -48,7 +266,7 @@ class NotificationService:
             elif channel == NotificationChannel.SMS:
                 success = await self._send_sms_notification(post, account)
             else:
-                logger.warning(f"Unknown notification channel: {channel}")
+                logger.warning("Unknown notification channel: %s", channel)
                 return False
 
             if success:
@@ -58,27 +276,33 @@ class NotificationService:
                 self.db.commit()
 
             return success
-
         except Exception as e:
-            logger.error(f"Failed to send notification: {e}")
+            logger.error("Failed to send notification: %s", e)
             return False
+
+    def _build_public_approval_links(self, post: Post) -> dict[str, str]:
+        """Build the live frontend approval links for a pending post."""
+        review_url = f"{settings.app_url}/approve/{post.id}?token={post.approval_token}"
+        return {
+            "approve_url": f"{review_url}&action=approve",
+            "reject_url": f"{review_url}&action=reject",
+            "review_url": review_url,
+        }
 
     async def _send_kakao_notification(self, post: Post, account: Account) -> bool:
         """Send KakaoTalk notification via Kakao API."""
-        kakao_token = getattr(settings, 'kakao_api_token', None)
+        kakao_token = getattr(settings, "kakao_api_token", None)
         if not kakao_token:
             logger.warning("Kakao API token not configured")
             return False
 
-        approval_url = f"{settings.app_url}/posts/{post.id}/approve?token={post.approval_token}"
-        reject_url = f"{settings.app_url}/posts/{post.id}/reject?token={post.approval_token}"
-
-        # Kakao 알림톡 템플릿 메시지
+        links = self._build_public_approval_links(post)
+        approval_url = links["approve_url"]
+        reject_url = links["reject_url"]
         message = self._build_approval_message(post, approval_url, reject_url)
 
         try:
             async with httpx.AsyncClient() as client:
-                # 카카오 알림톡 API 호출
                 response = await client.post(
                     "https://kapi.kakao.com/v2/api/talk/memo/default/send",
                     headers={
@@ -93,103 +317,105 @@ class NotificationService:
                                 "web_url": approval_url,
                                 "mobile_web_url": approval_url,
                             },
-                            "button_title": "승인하기",
+                            "button_title": "Approve",
                         }
                     },
                 )
 
                 if response.status_code == 200:
-                    logger.info(f"Kakao notification sent for post {post.id}")
+                    logger.info("Kakao notification sent for post %s", post.id)
                     return True
-                else:
-                    logger.error(f"Kakao API error: {response.text}")
-                    return False
 
+                logger.error("Kakao API error: %s", response.text)
+                return False
         except Exception as e:
-            logger.error(f"Kakao notification failed: {e}")
+            logger.error("Kakao notification failed: %s", e)
             return False
 
     async def _send_slack_notification(self, post: Post, account: Account) -> bool:
         """Send Slack notification via webhook."""
-        slack_webhook_url = getattr(settings, 'slack_webhook_url', None)
+        slack_webhook_url = getattr(settings, "slack_webhook_url", None)
         if not slack_webhook_url:
             logger.warning("Slack webhook URL not configured")
             return False
 
-        approval_url = f"{settings.app_url}/posts/{post.id}/approve?token={post.approval_token}"
-        reject_url = f"{settings.app_url}/posts/{post.id}/reject?token={post.approval_token}"
+        links = self._build_public_approval_links(post)
+        approval_url = links["approve_url"]
+        reject_url = links["reject_url"]
+        review_url = links["review_url"]
 
-        # Slack Block Kit 메시지
         blocks = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "📝 새 콘텐츠 승인 요청",
+                    "text": "New content approval request",
                     "emoji": True,
                 },
             },
             {
                 "type": "section",
                 "fields": [
-                    {"type": "mrkdwn", "text": f"*플랫폼:*\n{post.platform.value}"},
-                    {"type": "mrkdwn", "text": f"*위치:*\n{post.location.name if post.location else 'N/A'}"},
+                    {"type": "mrkdwn", "text": f"*Platform*\n{post.platform.value}"},
+                    {"type": "mrkdwn", "text": f"*Location*\n{post.location.name if post.location else 'N/A'}"},
                 ],
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*제목:*\n{post.title or '(제목 없음)'}",
+                    "text": f"*Title*\n{post.title or '(untitled)'}",
                 },
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*내용 미리보기:*\n{(post.body or '')[:300]}{'...' if post.body and len(post.body) > 300 else ''}",
+                    "text": f"*Preview*\n{(post.body or '')[:300]}{'...' if post.body and len(post.body) > 300 else ''}",
                 },
             },
         ]
 
-        # AI 생성 이미지가 있으면 표시
         if post.ai_image_url:
-            blocks.append({
-                "type": "image",
-                "image_url": post.ai_image_url,
-                "alt_text": "AI 생성 이미지",
-            })
+            blocks.append(
+                {
+                    "type": "image",
+                    "image_url": post.ai_image_url,
+                    "alt_text": "Generated image preview",
+                }
+            )
 
-        # 승인/거절 버튼
-        blocks.append({
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "✅ 승인", "emoji": True},
-                    "style": "primary",
-                    "url": approval_url,
-                    "action_id": "approve_post",
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "❌ 거절", "emoji": True},
-                    "style": "danger",
-                    "url": reject_url,
-                    "action_id": "reject_post",
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "📝 수정", "emoji": True},
-                    "url": f"{settings.app_url}/posts/{post.id}/edit",
-                    "action_id": "edit_post",
-                },
-            ],
-        })
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Approve", "emoji": True},
+                        "style": "primary",
+                        "url": approval_url,
+                        "action_id": "approve_post",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Reject", "emoji": True},
+                        "style": "danger",
+                        "url": reject_url,
+                        "action_id": "reject_post",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Review First", "emoji": True},
+                        "url": review_url,
+                        "action_id": "review_post",
+                    },
+                ],
+            }
+        )
 
         payload = {
             "blocks": blocks,
-            "text": f"새 콘텐츠 승인 요청: {post.title or post.platform.value}",
+            "text": f"Approval request: {post.title or post.platform.value}",
         }
 
         try:
@@ -197,14 +423,13 @@ class NotificationService:
                 response = await client.post(slack_webhook_url, json=payload)
 
                 if response.status_code == 200:
-                    logger.info(f"Slack notification sent for post {post.id}")
+                    logger.info("Slack notification sent for post %s", post.id)
                     return True
-                else:
-                    logger.error(f"Slack webhook error: {response.text}")
-                    return False
 
+                logger.error("Slack webhook error: %s", response.text)
+                return False
         except Exception as e:
-            logger.error(f"Slack notification failed: {e}")
+            logger.error("Slack notification failed: %s", e)
             return False
 
     async def _send_email_notification(self, post: Post, account: Account) -> bool:
@@ -213,34 +438,37 @@ class NotificationService:
             logger.warning("SMTP not configured")
             return False
 
-        approval_url = f"{settings.app_url}/posts/{post.id}/approve?token={post.approval_token}"
-        reject_url = f"{settings.app_url}/posts/{post.id}/reject?token={post.approval_token}"
+        links = self._build_public_approval_links(post)
+        approval_url = links["approve_url"]
+        reject_url = links["reject_url"]
+        review_url = links["review_url"]
 
-        subject = f"[승인 요청] 새 콘텐츠 - {post.platform.value}"
+        subject = f"[Approval Request] New content for {post.platform.value}"
         html_body = f"""
         <html>
         <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #333;">📝 새 콘텐츠 승인 요청</h2>
-            
+            <h2 style="color: #333;">New content approval request</h2>
+
             <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <p><strong>플랫폼:</strong> {post.platform.value}</p>
-                <p><strong>위치:</strong> {post.location.name if post.location else 'N/A'}</p>
-                <p><strong>제목:</strong> {post.title or '(제목 없음)'}</p>
+                <p><strong>Platform:</strong> {post.platform.value}</p>
+                <p><strong>Location:</strong> {post.location.name if post.location else 'N/A'}</p>
+                <p><strong>Title:</strong> {post.title or '(untitled)'}</p>
             </div>
-            
+
             <div style="background: #fff; border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <h3>내용 미리보기</h3>
+                <h3>Preview</h3>
                 <p>{(post.body or '')[:500]}{'...' if post.body and len(post.body) > 500 else ''}</p>
             </div>
-            
+
             {"<img src='" + post.ai_image_url + "' style='max-width: 100%; border-radius: 8px;' />" if post.ai_image_url else ""}
-            
+
             <div style="margin: 30px 0; text-align: center;">
-                <a href="{approval_url}" style="background: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 0 10px;">✅ 승인</a>
-                <a href="{reject_url}" style="background: #f44336; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 0 10px;">❌ 거절</a>
+                <a href="{approval_url}" style="background: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 0 10px;">Approve</a>
+                <a href="{review_url}" style="background: #6b7280; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 0 10px;">Review First</a>
+                <a href="{reject_url}" style="background: #f44336; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 0 10px;">Reject</a>
             </div>
-            
-            <p style="color: #666; font-size: 12px;">이 이메일은 Local SEO Optimizer에서 자동 발송되었습니다.</p>
+
+            <p style="color: #666; font-size: 12px;">This email was sent automatically by Local SEO Optimizer.</p>
         </body>
         </html>
         """
@@ -254,7 +482,6 @@ class NotificationService:
             msg["Subject"] = subject
             msg["From"] = settings.email_from
             msg["To"] = account.email
-
             msg.attach(MIMEText(html_body, "html"))
 
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
@@ -263,77 +490,62 @@ class NotificationService:
                     server.login(settings.smtp_user, settings.smtp_password)
                 server.sendmail(settings.email_from, account.email, msg.as_string())
 
-            logger.info(f"Email notification sent for post {post.id}")
+            logger.info("Email notification sent for post %s", post.id)
             return True
-
         except Exception as e:
-            logger.error(f"Email notification failed: {e}")
+            logger.error("Email notification failed: %s", e)
             return False
 
     def _build_approval_message(self, post: Post, approval_url: str, reject_url: str) -> str:
         """Build approval message text."""
-        return f"""📝 새 콘텐츠 승인 요청
-
-플랫폼: {post.platform.value}
-위치: {post.location.name if post.location else 'N/A'}
-제목: {post.title or '(제목 없음)'}
-
-내용:
-{(post.body or '')[:200]}{'...' if post.body and len(post.body) > 200 else ''}
-
-승인하기: {approval_url}
-거절하기: {reject_url}
-"""
+        return (
+            "New content approval request\n\n"
+            f"Platform: {post.platform.value}\n"
+            f"Location: {post.location.name if post.location else 'N/A'}\n"
+            f"Title: {post.title or '(untitled)'}\n\n"
+            f"Preview:\n{(post.body or '')[:200]}{'...' if post.body and len(post.body) > 200 else ''}\n\n"
+            f"Approve: {approval_url}\n"
+            f"Reject: {reject_url}\n"
+        )
 
     async def _send_sms_notification(self, post: Post, account: Account) -> bool:
         """Send SMS notification via Twilio."""
-        from twilio.rest import Client
-
-        if not settings.twilio_account_sid or not settings.twilio_auth_token:
-            logger.warning("Twilio not configured")
-            return False
-
-        # Get phone number from account
-        phone_number = getattr(account, 'phone', None)
+        phone_number = getattr(account, "phone", None)
         if not phone_number:
-            logger.warning(f"No phone number for account {account.id}")
+            logger.warning("No phone number for account %s", account.id)
             return False
 
-        # Generate magic link
         from app.services.magic_link import MagicLinkService
+
         magic_link = MagicLinkService()
         links = magic_link.generate_approval_links(
             post_id=post.id,
             account_id=account.id,
+            approval_token=post.approval_token,
         )
 
-        # Build SMS message (keep it short for SMS)
-        message = f"""[Local SEO Optimizer]
-새 콘텐츠 승인 요청
+        message = (
+            "[Local SEO Optimizer]\n"
+            "Approval request\n\n"
+            f"{post.title or post.platform.value}\n\n"
+            f"Approve: {links['approve_url']}\n\n"
+            f"Reject: {links['reject_url']}\n\n"
+            "Please respond within 72 hours."
+        )
 
-{post.title or post.platform.value}
-
-✅ 승인: {links['approve_url']}
-
-❌ 거절: {links['reject_url']}
-
-72시간 내 응답 필요"""
-
-        try:
-            client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-            
-            sms = client.messages.create(
-                body=message,
-                from_=settings.twilio_phone_number,
-                to=phone_number,
-            )
-
-            logger.info(f"SMS notification sent for post {post.id}: {sms.sid}")
+        result = await self.send_sms(phone_number, message, account_id=account.id)
+        if result.get("success"):
+            logger.info("SMS notification sent for post %s: %s", post.id, result.get("message_sid"))
             return True
+        logger.error("SMS notification failed for post %s: %s", post.id, result.get("error"))
+        return False
 
-        except Exception as e:
-            logger.error(f"SMS notification failed: {e}")
-            return False
+    def _normalize_email_send_result(self, provider: str, result: dict[str, Any] | None) -> dict[str, Any]:
+        """Normalize helper payloads to the public email delivery contract."""
+        normalized = dict(result or {})
+        normalized.setdefault("provider", provider)
+        normalized.setdefault("success", "error" not in normalized)
+        return normalized
 
     async def send_email(
         self,
@@ -342,10 +554,58 @@ class NotificationService:
         html_body: str,
         text_body: str | None = None,
     ) -> dict:
-        """Send a generic email."""
+        """Send a generic email using SMTP first, then SendGrid when available."""
+        smtp_error: str | None = None
+
+        if settings.smtp_host:
+            try:
+                return self._normalize_email_send_result(
+                    "smtp",
+                    await self._send_email_via_smtp(
+                        to_email=to_email,
+                        subject=subject,
+                        html_body=html_body,
+                        text_body=text_body,
+                    ),
+                )
+            except (EmailDeliveryError, EmailUnavailableError) as exc:
+                smtp_error = str(exc)
+                logger.error("SMTP email send failed for %s: %s", to_email, exc)
+
+        if settings.sendgrid_api_key:
+            try:
+                return self._normalize_email_send_result(
+                    "sendgrid",
+                    await self._send_email_via_sendgrid(
+                        to_email=to_email,
+                        subject=subject,
+                        html_body=html_body,
+                    ),
+                )
+            except (EmailUnavailableError, EmailDeliveryError) as exc:
+                sendgrid_error = str(exc)
+                logger.error("SendGrid email send failed for %s: %s", to_email, exc)
+                if smtp_error:
+                    return {"success": False, "error": f"SMTP failed: {smtp_error}; SendGrid failed: {sendgrid_error}"}
+                return {"success": False, "error": sendgrid_error}
+
+        if smtp_error:
+            return {"success": False, "error": smtp_error}
+
+        logger.warning("Email delivery is not configured")
+        return {"success": False, "error": "Email delivery is not configured"}
+
+    async def _send_email_via_smtp(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        text_body: str | None = None,
+    ) -> dict:
+        """Send email via SMTP."""
         if not settings.smtp_host:
-            logger.warning("SMTP not configured")
-            return {"success": False, "error": "SMTP not configured"}
+            raise EmailUnavailableError("SMTP is not configured")
 
         try:
             import smtplib
@@ -367,39 +627,71 @@ class NotificationService:
                     server.login(settings.smtp_user, settings.smtp_password)
                 server.sendmail(settings.email_from, to_email, msg.as_string())
 
-            logger.info(f"Email sent to {to_email}")
-            return {"success": True}
+            logger.info("Email sent to %s via SMTP", to_email)
+            return {"success": True, "provider": "smtp"}
+        except Exception as exc:
+            raise EmailDeliveryError(str(exc)) from exc
 
-        except Exception as e:
-            logger.error(f"Email send failed: {e}")
-            return {"success": False, "error": str(e)}
+    async def _send_email_via_sendgrid(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        html_body: str,
+    ) -> dict:
+        """Send email via SendGrid."""
+        result = await EmailService().send_email(
+            to=to_email,
+            subject=subject,
+            html_content=html_body,
+            from_email=settings.sendgrid_from_email or settings.email_from,
+            from_name=settings.app_name,
+        )
+        logger.info("Email sent to %s via SendGrid", to_email)
+        return {
+            "success": True,
+            "provider": "sendgrid",
+            "message_id": result.get("message_id"),
+            "status_code": result.get("status_code"),
+        }
 
     async def send_sms(
         self,
         to_phone: str,
         message: str,
+        account_id: UUID | None = None,
     ) -> dict:
         """Send a generic SMS via Twilio."""
-        from twilio.rest import Client
-
-        if not settings.twilio_account_sid or not settings.twilio_auth_token:
-            logger.warning("Twilio not configured")
-            return {"success": False, "error": "Twilio not configured"}
-
         try:
-            client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-            
-            sms = client.messages.create(
-                body=message,
-                from_=settings.twilio_phone_number,
+            if account_id is not None:
+                self._preview_sms_usage(account_id)
+
+            result = await get_twilio_service().send_sms(
                 to=to_phone,
+                body=message,
             )
+            if account_id is not None:
+                self._record_sms_usage(account_id)
 
-            logger.info(f"SMS sent to {to_phone}: {sms.sid}")
-            return {"success": True, "message_sid": sms.sid}
-
+            logger.info("SMS sent to %s: %s", to_phone, result.get("sid"))
+            return {
+                "success": True,
+                "message_sid": result.get("sid"),
+                "status": result.get("status"),
+            }
+        except NotificationSMSLimitError as exc:
+            logger.warning("SMS send blocked by usage limit for account %s: %s", account_id, exc)
+            return {
+                "success": False,
+                "error": exc.detail.get("message"),
+                "error_code": "rate_limit_exceeded",
+                **exc.detail,
+            }
+        except (TwilioUnavailableError, TwilioDeliveryError) as exc:
+            logger.error("SMS send failed: %s", exc)
+            return {"success": False, "error": str(exc)}
         except Exception as e:
-            logger.error(f"SMS send failed: {e}")
+            logger.error("SMS send failed: %s", e)
             return {"success": False, "error": str(e)}
 
     async def send_approval_result(
@@ -412,19 +704,23 @@ class NotificationService:
         """Send notification about approval result."""
         channel = channel or NotificationChannel(post.notification_channel) if post.notification_channel else NotificationChannel.SLACK
 
-        status = "승인됨 ✅" if approved else "거절됨 ❌"
-        message = f"콘텐츠가 {status}\n\n플랫폼: {post.platform.value}\n제목: {post.title or '(제목 없음)'}"
+        status = "approved" if approved else "rejected"
+        message = (
+            f"Content was {status}.\n\n"
+            f"Platform: {post.platform.value}\n"
+            f"Title: {post.title or '(untitled)'}"
+        )
 
         if not approved and post.rejection_reason:
-            message += f"\n\n거절 사유: {post.rejection_reason}"
+            message += f"\n\nReason: {post.rejection_reason}"
 
         try:
             if channel == NotificationChannel.SLACK:
-                slack_webhook_url = getattr(settings, 'slack_webhook_url', None)
+                slack_webhook_url = getattr(settings, "slack_webhook_url", None)
                 if slack_webhook_url:
                     async with httpx.AsyncClient() as client:
                         await client.post(slack_webhook_url, json={"text": message})
             return True
         except Exception as e:
-            logger.error(f"Failed to send approval result notification: {e}")
+            logger.error("Failed to send approval result notification: %s", e)
             return False

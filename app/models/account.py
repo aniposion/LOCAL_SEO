@@ -13,6 +13,7 @@ from app.db.base import BaseModel
 if TYPE_CHECKING:
     from app.models.location import Location
     from app.models.subscription import Subscription
+    from app.models.oauth import OAuthToken
 
 
 class AccountRole(str, enum.Enum):
@@ -63,6 +64,9 @@ class Account(BaseModel):
         DateTime(timezone=True), nullable=True
     )
     verification_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verification_token_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     
     # Password reset
     password_reset_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -98,6 +102,14 @@ class Account(BaseModel):
     )
     onboarding_audit: Mapped["OnboardingAudit | None"] = relationship(
         "OnboardingAudit", back_populates="account", uselist=False, cascade="all, delete-orphan"
+    )
+    onboarding_progress: Mapped["OnboardingProgress | None"] = relationship(
+        "OnboardingProgress", back_populates="account", uselist=False, cascade="all, delete-orphan"
+    )
+    
+    # P4: OAuth tokens
+    oauth_tokens: Mapped[list["OAuthToken"]] = relationship(
+        "OAuthToken", back_populates="account", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

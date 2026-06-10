@@ -7,6 +7,14 @@ from email.mime.text import MIMEText
 from app.core.config import settings
 
 
+class EmailClientUnavailableError(RuntimeError):
+    """Raised when report email delivery is not configured."""
+
+
+class EmailClientDeliveryError(RuntimeError):
+    """Raised when report email delivery fails after configuration is present."""
+
+
 class EmailClient:
     """Client for sending emails via SMTP."""
 
@@ -26,8 +34,7 @@ class EmailClient:
     ) -> None:
         """Send an email."""
         if not self.host:
-            # Skip sending in development
-            return
+            raise EmailClientUnavailableError("SMTP is not configured for report email delivery.")
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -42,11 +49,14 @@ class EmailClient:
             msg.attach(MIMEText(html_body, "html"))
 
         # Send email
-        with smtplib.SMTP(self.host, self.port) as server:
-            if self.user and self.password:
-                server.starttls()
-                server.login(self.user, self.password)
-            server.sendmail(self.from_email, to_email, msg.as_string())
+        try:
+            with smtplib.SMTP(self.host, self.port) as server:
+                if self.user and self.password:
+                    server.starttls()
+                    server.login(self.user, self.password)
+                server.sendmail(self.from_email, to_email, msg.as_string())
+        except Exception as exc:
+            raise EmailClientDeliveryError(str(exc)) from exc
 
     async def send_report(
         self,

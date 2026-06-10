@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to Local SEO Optimizer</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
+    .header { background: linear-gradient(135deg, #0f766e 0%, #155e75 100%); padding: 50px 30px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 28px; }
+    .header p { color: #ccfbf1; margin: 10px 0 0; }
+    .content { padding: 40px 30px; }
+    .welcome-box { background: linear-gradient(135deg, #f0fdfa 0%, #ecfeff 100%); border-radius: 12px; padding: 30px; text-align: center; margin-bottom: 30px; }
+    .step-card { display: flex; align-items: flex-start; padding: 20px; background-color: #f9fafb; border-radius: 8px; margin-bottom: 15px; }
+    .step-icon { width: 48px; height: 48px; background-color: #0f766e; color: #ffffff; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-right: 20px; flex-shrink: 0; font-size: 20px; font-weight: 700; }
+    .cta-button { display: inline-block; background: linear-gradient(135deg, #0f766e 0%, #155e75 100%); color: #ffffff; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-weight: 600; font-size: 16px; }
+    .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 30px 0; }
+    .feature-item { text-align: center; padding: 20px; background-color: #f9fafb; border-radius: 8px; }
+    .feature-icon { font-size: 24px; margin-bottom: 10px; color: #0f766e; font-weight: 700; }
+    .footer { background-color: #f9fafb; padding: 30px; text-align: center; color: #6b7280; font-size: 12px; }
+    .social-links a { display: inline-block; margin: 0 10px; color: #0f766e; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Welcome to Local SEO Optimizer</h1>
+      <p>Your path to a clearer local growth system starts now</p>
+    </div>
+
+    <div class="content">
+      <div class="welcome-box">
+        <h2 style="margin: 0 0 10px;">Hi {{user_name}}!</h2>
+        <p style="margin: 0; color: #6b7280;">Your {{trial_days}}-day free preview is active. Use it to review your dashboard, audit, and setup readiness. Paid AI, SMS, publishing, and automation stay locked until you choose a plan.</p>
+      </div>
+
+      <h3>Get Started in 3 Simple Steps:</h3>
+
+      <div class="step-card">
+        <div class="step-icon">1</div>
+        <div>
+          <h4 style="margin: 0 0 5px;">Connect Your Business Profile</h4>
+          <p style="margin: 0; color: #6b7280;">Link your Google Business Profile when you are ready to review connection health.</p>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-icon">2</div>
+        <div>
+          <h4 style="margin: 0 0 5px;">Run Your First Audit</h4>
+          <p style="margin: 0; color: #6b7280;">Check what is missing, what is healthy, and what should be fixed before launch.</p>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-icon">3</div>
+        <div>
+          <h4 style="margin: 0 0 5px;">Choose a Paid Plan When Ready</h4>
+          <p style="margin: 0; color: #6b7280;">Unlock AI generation, SMS workflows, publishing, and automation only after you choose a plan.</p>
+        </div>
+      </div>
+
+      <div style="text-align: center; margin: 40px 0;">
+        <a href="{{dashboard_url}}" class="cta-button">Go to Dashboard</a>
+      </div>
+
+      <h3>What's Included in Your Free Preview:</h3>
+      <div class="feature-grid">
+        <div class="feature-item">
+          <div class="feature-icon">01</div>
+          <strong>Dashboard Preview</strong>
+          <p style="margin: 5px 0 0; font-size: 14px; color: #6b7280;">Review the command center before activating paid workflows</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">02</div>
+          <strong>Setup Checks</strong>
+          <p style="margin: 5px 0 0; font-size: 14px; color: #6b7280;">Confirm locations, integrations, and launch readiness</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">03</div>
+          <strong>Audit Review</strong>
+          <p style="margin: 5px 0 0; font-size: 14px; color: #6b7280;">Understand what needs attention before publishing</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">04</div>
+          <strong>Paid Feature Locks</strong>
+          <p style="margin: 5px 0 0; font-size: 14px; color: #6b7280;">AI, SMS, publishing, and automation stay off by default</p>
+        </div>
+      </div>
+
+      <div style="background-color: #f0fdf4; border-radius: 8px; padding: 20px; margin-top: 30px;">
+        <h4 style="margin: 0 0 10px; color: #166534;">Pro Tip</h4>
+        <p style="margin: 0; color: #166534;">Use the preview to make sure the account is configured correctly before any cost-bearing workflow goes live.</p>
+      </div>
+
+      <div style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #e5e7eb;">
+        <h4>Need Help Getting Started?</h4>
+        <ul style="color: #6b7280; line-height: 2;">
+          <li><a href="{{help_center_url}}" style="color: #0f766e;">Help Center and tutorials</a></li>
+          <li><a href="{{schedule_demo_url}}" style="color: #0f766e;">Schedule a setup call</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>Questions? Reply to this email or contact support@localseo-optimizer.com</p>
+      <div class="social-links">
+        <a href="#">Twitter</a>
+        <a href="#">LinkedIn</a>
+        <a href="#">Help Center</a>
+      </div>
+      <p style="margin-top: 20px;">&copy; {{year}} Local SEO Optimizer. All rights reserved.</p>
+      <p><a href="{{unsubscribe_url}}" style="color: #9ca3af;">Unsubscribe</a></p>
+    </div>
+  </div>
+</body>
+</html>

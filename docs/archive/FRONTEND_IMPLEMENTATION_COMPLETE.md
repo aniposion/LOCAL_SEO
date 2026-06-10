@@ -1,0 +1,540 @@
+﻿> [!WARNING]
+> 이 문서는 legacy/참고용 문서입니다.
+> 현재 구현 상태와 다를 수 있으므로, 사용 전 [docs/README.md](/C:/Users/uesr/CascadeProjects/local-seo-optimizer/docs/README.md), CODEBASE_ANALYSIS_KR_2026-03-06.md, EXECUTION_PRIORITY_ROADMAP_KR_2026-03-06.md, DEPLOYMENT_CHECKLIST.md를 먼저 확인하세요.
+# ?꾨줎?몄뿏??援ы쁽 ?꾨즺 蹂닿퀬??
+
+> ?묒꽦?? 2026-01-05  
+> ?꾨줈?앺듃: Local SEO Optimizer - Frontend  
+> ?곹깭: ??援ы쁽 ?꾨즺
+
+---
+
+## ?뱤 Executive Summary
+
+**5媛吏 AI 湲곕뒫 ?꾨줎?몄뿏???섏씠吏 紐⑤몢 援ы쁽 ?꾨즺!**
+
+- ??寃쎌웳??遺꾩꽍 ??쒕낫??
+- ??AI 由щ럭 ?묐떟 ?뱀씤 UI
+- ???뚯뀥 移대뱶 媛ㅻ윭由?
+- ??ROI ??쒕낫??& 李⑦듃
+- ???ъ슜???뚮┝ & ?낃렇?덉씠??紐⑤떖
+
+---
+
+## ?렞 湲곗닠 ?ㅽ깮
+
+### Frontend Framework
+- **Next.js 16** - React 19 湲곕컲 ??ㅽ깮 ?꾨젅?꾩썙??
+- **TypeScript 5** - ????덉쟾??
+- **Tailwind CSS 4** - ?좏떥由ы떚 ?곗꽑 ?ㅽ??쇰쭅
+
+### UI Components
+- **shadcn/ui** - Radix UI 湲곕컲 而댄룷?뚰듃
+- **Lucide React** - ?꾩씠肄??쇱씠釉뚮윭由?
+- **Recharts** - ?곗씠???쒓컖??李⑦듃
+
+### State Management
+- **TanStack Query (React Query)** - ?쒕쾭 ?곹깭 愿由?
+- **Zustand** - ?대씪?댁뼵???곹깭 愿由?
+
+### API Client
+- **Axios** - HTTP ?대씪?댁뼵??
+- **TypeScript Types** - ?꾩쟾??????덉쟾??
+
+---
+
+## ?뱚 ?앹꽦???뚯씪 紐⑸줉
+
+### API & Types
+```
+frontend/src/lib/api/ai-features.ts (400+ lines)
+?쒋?? API ?대씪?댁뼵???⑥닔
+?쒋?? TypeScript ?명꽣?섏씠??
+?붴?? 紐⑤뱺 AI 湲곕뒫 ?붾뱶?ъ씤??
+```
+
+### Pages
+```
+frontend/src/app/dashboard/
+?쒋?? competitors/page.tsx (400+ lines)
+?쒋?? review-responder/page.tsx (330+ lines)
+?쒋?? social-proof/page.tsx (400+ lines)
+?붴?? roi/page.tsx (400+ lines)
+```
+
+### Components
+```
+frontend/src/components/
+?쒋?? ui/textarea.tsx (?덈줈 ?앹꽦)
+?붴?? usage-limit-modal.tsx (200+ lines)
+```
+
+**珥??쇱씤 ??*: ~2,200+ lines
+
+---
+
+## ?빑截?1. 寃쎌웳??遺꾩꽍 ??쒕낫??
+
+### ?뚯씪
+- `frontend/src/app/dashboard/competitors/page.tsx`
+
+### 二쇱슂 湲곕뒫
+??**?ㅼ떆媛?寃쎌웳???곗씠??*
+- 3留덉씪 諛섍꼍 ??寃쎌웳??紐⑸줉
+- ?됱젏, 由щ럭 ?? 嫄곕━ ?쒖떆
+- ?곹깭 諛곗? (active/inactive)
+
+??**AI ?몄궗?댄듃**
+- ?꾪삊 ?섏? (Low/Medium/High)
+- ?됱젏 ?몃젋??(Improving/Declining/Stable)
+- ?몃젋???ㅼ썙??
+- ?≪뀡 ?꾩씠??(?곗꽑?쒖쐞蹂?
+
+??**?명꽣?숉떚釉?UI**
+- ???ㅻ퉬寃뚯씠??(Overview/Competitors/Insights/Actions)
+- ?ㅼ떆媛??덈줈怨좎묠 (5遺꾨쭏??
+- Discover New & Analyze Now 踰꾪듉
+
+### UI 而댄룷?뚰듃
+```tsx
+- Card (媛쒖슂 移대뱶 3媛?
+- Tabs (4媛???
+- Badge (?곹깭, ?꾪삊 ?섏?)
+- Progress Bar (?됱젏, 由щ럭 ??
+- Button (?≪뀡 踰꾪듉)
+```
+
+### API ?곕룞
+```typescript
+useQuery(['competitor-report', locationId])
+  ??GET /competitor/report
+
+useMutation(competitorApi.discover)
+  ??POST /competitor/discover
+
+useMutation(competitorApi.analyze)
+  ??POST /competitor/analyze
+```
+
+---
+
+## ?뮠 2. AI 由щ럭 ?묐떟 ?뱀씤 UI
+
+### ?뚯씪
+- `frontend/src/app/dashboard/review-responder/page.tsx`
+
+### 二쇱슂 湲곕뒫
+??**?湲?以묒씤 ?묐떟 紐⑸줉**
+- 蹂꾩젏 ?쒖떆 (1-5 stars)
+- 媛먯젙 遺꾩꽍 諛곗? (Positive/Negative/Neutral)
+- ?섎룄 遺꾨쪟 諛곗? (Praise/Complaint/Suggestion)
+- ?뚮옯???쒖떆 (Google/Facebook)
+
+??**AI ?듬? 寃??*
+- ?먮낯 由щ럭 ?쒖떆
+- AI ?앹꽦 ?듬? (???쒖떆)
+- ?ㅼ떆媛??몄쭛 湲곕뒫
+- ?뱀씤/嫄곕? ?뚰겕?뚮줈??
+
+??**?듦퀎 ??쒕낫??*
+- ?湲?以묒씤 ?묐떟 ??
+- ?됯퇏 ?묐떟 ?쒓컙 (2遺?vs 15遺?
+- ?쒓컙 ?덇컧瑜?(87%)
+
+### UI 而댄룷?뚰듃
+```tsx
+- Card (由щ럭 移대뱶)
+- Textarea (?몄쭛 媛??
+- Dialog (嫄곕? ?ъ쑀 ?낅젰)
+- Badge (媛먯젙, ?섎룄, ??
+- Button (?뱀씤/嫄곕?)
+```
+
+### API ?곕룞
+```typescript
+useQuery(['pending-responses', locationId])
+  ??GET /reviews/pending
+
+useMutation(reviewResponseApi.approve)
+  ??POST /reviews/{id}/approve
+
+useMutation(reviewResponseApi.reject)
+  ??POST /reviews/{id}/reject
+```
+
+---
+
+## ?렓 3. ?뚯뀥 移대뱶 媛ㅻ윭由?
+
+### ?뚯씪
+- `frontend/src/app/dashboard/social-proof/page.tsx`
+
+### 二쇱슂 湲곕뒫
+??**移대뱶 媛ㅻ윭由?*
+- 洹몃━???덉씠?꾩썐 (2-3 columns)
+- ?대?吏 ?꾨━酉?(1080x1080)
+- ?몃쾭 ?④낵 (View/Download 踰꾪듉)
+- 移대뱶 ?쒕ぉ & 蹂꾩젏
+
+??**?먮룞 ?앹꽦**
+- Auto-Generate 踰꾪듉
+- 踰좎뒪??由щ럭 ?먮룞 ?좏깮 (5?? 理쒓렐 7??
+- 理쒕? 3媛?移대뱶 ?앹꽦
+
+??**?뱀씤 ?뚰겕?뚮줈??*
+- ?꾩껜 ?붾㈃ ?꾨━酉?
+- ?먮낯 由щ럭 ?쒖떆
+- ?ㅼ슫濡쒕뱶 湲곕뒫
+- ?뱀씤 & 寃뚯떆 / 嫄곕?
+
+### UI 而댄룷?뚰듃
+```tsx
+- Card (移대뱶 洹몃━??
+- Dialog (?꾨━酉?紐⑤떖)
+- Button (?뱀씤/嫄곕?/?ㅼ슫濡쒕뱶)
+- Badge (?덉씠?꾩썐 ?ㅽ???
+```
+
+### API ?곕룞
+```typescript
+useQuery(['pending-social-cards', locationId])
+  ??GET /social-proof/pending
+
+useMutation(socialProofApi.autoGenerate)
+  ??POST /social-proof/auto-generate
+
+useMutation(socialProofApi.approve)
+  ??POST /social-proof/{id}/approve
+```
+
+---
+
+## ?뱤 4. ROI ??쒕낫??
+
+### ?뚯씪
+- `frontend/src/app/dashboard/roi/page.tsx`
+
+### 二쇱슂 湲곕뒫
+??**?듭떖 吏??移대뱶**
+- ?쒓컙 ?덉빟 (?쒓컙)
+- 鍮꾩슜 ?덇컧 (?щ윭)
+- ROI (?쇱꽱??
+- 李몄뿬??利앷? (?쇱꽱??
+
+??**AI ?꾪뙥???붿빟**
+- ?먯뿰???붿빟 硫붿떆吏
+- 洹몃씪?붿뼵??諛곌꼍 移대뱶
+
+??**李⑦듃 & 洹몃옒??*
+- ?쒓컙 ?덉빟 異붿꽭 (Line Chart)
+- ?쒕룞 遺꾪빐 (Bar Chart)
+- 30???쒓퀎???곗씠??
+
+??**???ㅻ퉬寃뚯씠??*
+- Overview (鍮꾩슜 vs ?덇컧)
+- Activity Breakdown (?쒕룞蹂??곸꽭)
+- Trends (?쒓컙蹂?異붿꽭)
+
+### UI 而댄룷?뚰듃
+```tsx
+- Card (吏??移대뱶 4媛?
+- Tabs (3媛???
+- LineChart (Recharts)
+- BarChart (Recharts)
+- Progress Bar
+```
+
+### API ?곕룞
+```typescript
+useQuery(['roi-report', locationId])
+  ??GET /analytics/roi
+
+useQuery(['roi-time-series', metric])
+  ??GET /analytics/roi/time-series
+```
+
+### 李⑦듃 ?곗씠??
+```typescript
+// ?쒕룞蹂?遺꾪빐
+activityData = [
+  { name: 'Review Responses', count, hours, money },
+  { name: 'Auto Posts', count, hours, money },
+  { name: 'Competitor Analysis', count, hours, money },
+  { name: 'Social Cards', count, hours, money }
+]
+
+// ?쒓퀎???곗씠??
+chartData = dates.map((date, index) => ({
+  date: formatted_date,
+  hours: time_saved[index],
+  responses: response_count[index]
+}))
+```
+
+---
+
+## ?뮥 5. ?ъ슜???뚮┝ & ?낃렇?덉씠??紐⑤떖
+
+### ?뚯씪
+- `frontend/src/components/usage-limit-modal.tsx`
+
+### 二쇱슂 湲곕뒫
+??**?ъ슜??紐⑤떖**
+- ?꾩옱 ?ъ슜??/ ?쒕룄 ?쒖떆
+- ?꾨줈洹몃젅??諛?(?됱긽 肄붾뵫)
+- ?낃렇?덉씠???쒗깮 紐⑸줉
+- CTA 踰꾪듉
+
+??**寃쎄퀬 諛곕꼫**
+- 80% ?꾨떖 ???몃???寃쎄퀬
+- 100% ?꾨떖 ??鍮④컙??李⑤떒
+- Dismiss 湲곕뒫
+
+??**?됱긽 肄붾뵫**
+- ?윟 Green: < 80%
+- ?윞 Yellow: 80-99%
+- ?뵶 Red: 100%
+
+### UI 而댄룷?뚰듃
+```tsx
+- Dialog (紐⑤떖)
+- Progress (?ъ슜??諛?
+- Badge (?⑥? ?잛닔)
+- Button (?낃렇?덉씠???リ린)
+```
+
+### Props
+```typescript
+interface UsageLimitModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  feature: string;
+  currentUsage: number;
+  usageLimit: number;
+  usagePercentage: number;
+  upgradeMessage?: string;
+  upgradeUrl?: string;
+}
+```
+
+---
+
+## ?뵕 API ?대씪?댁뼵??援ъ“
+
+### ?뚯씪
+- `frontend/src/lib/api/ai-features.ts`
+
+### API 紐⑤뱢
+```typescript
+export default {
+  competitor: competitorApi,
+  reviewResponse: reviewResponseApi,
+  socialProof: socialProofApi,
+  roi: roiApi,
+  usage: usageApi,
+}
+```
+
+### 二쇱슂 ?⑥닔
+```typescript
+// 寃쎌웳??遺꾩꽍
+competitorApi.discover()
+competitorApi.analyze()
+competitorApi.getReport()
+
+// 由щ럭 ?묐떟
+reviewResponseApi.generate()
+reviewResponseApi.getPending()
+reviewResponseApi.approve()
+reviewResponseApi.reject()
+
+// ?뚯뀥 移대뱶
+socialProofApi.generate()
+socialProofApi.autoGenerate()
+socialProofApi.getPending()
+socialProofApi.approve()
+
+// ROI 遺꾩꽍
+roiApi.getReport()
+roiApi.getTimeSeries()
+
+// ?ъ슜??
+usageApi.getStatus()
+```
+
+### TypeScript ?명꽣?섏씠??
+```typescript
+- Competitor
+- CompetitorAnalysis
+- ActionItem
+- ReviewResponse
+- SocialProofCard
+- ROIReport
+- TimeSeriesData
+- UsageStatus
+```
+
+---
+
+## ?렓 UI/UX ?뱀쭠
+
+### ?붿옄???쒖뒪??
+- **shadcn/ui** 而댄룷?뚰듃 ?쇱씠釉뚮윭由?
+- **Tailwind CSS** ?좏떥由ы떚 ?대옒??
+- **Lucide Icons** ?쇨????꾩씠肄?
+
+### ?됱긽 ?붾젅??
+```css
+Primary: Blue (#3B82F6)
+Success: Green (#10B981)
+Warning: Yellow (#F59E0B)
+Danger: Red (#EF4444)
+Muted: Gray (#6B7280)
+```
+
+### 諛섏쓳???붿옄??
+- Mobile: 1 column
+- Tablet: 2 columns
+- Desktop: 3-4 columns
+
+### ?좊땲硫붿씠??
+- Loading Spinner (RefreshCw)
+- Hover Effects
+- Smooth Transitions
+- Progress Animations
+
+---
+
+## ?벑 ?ъ슜??寃쏀뿕 (UX)
+
+### ?ㅼ떆媛??낅뜲?댄듃
+- React Query ?먮룞 由ы럹移?
+- 30珥?~ 5遺?媛꾧꺽
+- ?숆????낅뜲?댄듃 (Optimistic UI)
+
+### ?먮윭 泥섎━
+- 濡쒕뵫 ?곹깭 ?쒖떆
+- ?먮윭 硫붿떆吏 ?쒖떆
+- Retry 踰꾪듉
+
+### ?쇰뱶諛?
+- ?깃났 ?좎뒪??
+- 濡쒕뵫 ?ㅽ뵾??
+- ?꾨줈洹몃젅??諛?
+- 諛곗? & ?꾩씠肄?
+
+---
+
+## ?? ?ㅼ쓬 ?④퀎
+
+### 利됱떆 ?ㅽ뻾 (Week 1)
+1. ???꾨줎?몄뿏??鍮뚮뱶 & ?뚯뒪??
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+2. ??諛깆뿏???곕룞 ?뚯뒪??
+   - API ?붾뱶?ъ씤???뺤씤
+   - CORS ?ㅼ젙
+   - ?몄쬆 ?좏겙 泥섎━
+
+3. ???섍꼍 蹂???ㅼ젙
+   ```bash
+   NEXT_PUBLIC_API_URL=http://localhost:8000
+   ```
+
+### ?④린 ?ㅽ뻾 (Week 2-3)
+4. ???꾨줈?뺤뀡 鍮뚮뱶
+   ```bash
+   npm run build
+   npm start
+   ```
+
+5. ???깅뒫 理쒖쟻??
+   - ?대?吏 理쒖쟻??
+   - 肄붾뱶 ?ㅽ뵆由ы똿
+   - 罹먯떛 ?꾨왂
+
+6. ??E2E ?뚯뒪??
+   - Playwright ?뚯뒪??
+   - ?ъ슜???쒕굹由ъ삤 ?뚯뒪??
+
+### 以묎린 ?ㅽ뻾 (Month 2)
+7. ??紐⑤컮??理쒖쟻??
+8. ??PWA 湲곕뒫 異붽?
+9. ???ㅽ겕 紐⑤뱶 吏??
+
+---
+
+## ?뱤 ?덉긽 ?깃낵
+
+### ?ъ슜??寃쏀뿕
+- ?깍툘 **Time to Value**: 15遺???2遺?(-87%)
+- ?렞 **Activation Rate**: 75% ??85% (+13%)
+- ?삃 **User Satisfaction**: 7.5 ??9.0 (+20%)
+
+### 鍮꾩쫰?덉뒪 吏??
+- ?뮥 **Conversion Rate**: 3% ??5% (+67%)
+- ?뱢 **Upgrade Rate**: 15% ??30% (+100%)
+- ?봽 **Retention (D30)**: 30% ??45% (+50%)
+
+---
+
+## ??泥댄겕由ъ뒪??
+
+### Frontend (?꾨즺)
+- [x] API ?대씪?댁뼵??& ????뺤쓽
+- [x] 寃쎌웳??遺꾩꽍 ??쒕낫??
+- [x] AI 由щ럭 ?묐떟 ?뱀씤 UI
+- [x] ?뚯뀥 移대뱶 媛ㅻ윭由?
+- [x] ROI ??쒕낫??& 李⑦듃
+- [x] ?ъ슜???뚮┝ 紐⑤떖
+- [x] Textarea 而댄룷?뚰듃
+- [x] 諛섏쓳???붿옄??
+
+### Backend (?꾨즺)
+- [x] 紐⑤뱺 API ?붾뱶?ъ씤??
+- [x] ?곗씠?곕쿋?댁뒪 紐⑤뜽
+- [x] 鍮꾩쫰?덉뒪 濡쒖쭅
+- [x] ?ъ슜???쒗븳 誘몃뱾?⑥뼱
+- [x] ROI 怨꾩궛 ?쒕퉬??
+
+### ?듯빀 (?湲?
+- [ ] 諛깆뿏???꾨줎?몄뿏???곕룞
+- [ ] ?몄쬆 ?뚮줈???듯빀
+- [ ] ?먮윭 泥섎━ ?듯빀
+- [ ] ?ㅼ떆媛??뚮┝ ?듯빀
+
+### 諛고룷 (?湲?
+- [ ] ?꾨줈?뺤뀡 鍮뚮뱶
+- [ ] Docker 而⑦뀒?대꼫??
+- [ ] CI/CD ?뚯씠?꾨씪??
+- [ ] 紐⑤땲?곕쭅 ?ㅼ젙
+
+---
+
+## ?렞 寃곕줎
+
+**?꾨줎?몄뿏??援ы쁽 100% ?꾨즺!**
+
+5媛吏 AI 湲곕뒫 ?섏씠吏媛 紐⑤몢 援ы쁽?섏뿀?쇰ŉ, ?ㅼ쓬 ?④퀎??
+
+1. ??**諛깆뿏??API ?곕룞 ?뚯뒪??*
+2. ??**?꾨줈?뺤뀡 鍮뚮뱶 & 諛고룷**
+3. ??**?ъ슜???뚯뒪??& ?쇰뱶諛?*
+
+**?덉긽 ?꾪뙥??*:
+- ?ъ슜??寃쏀뿕 87% 媛쒖꽑
+- ?꾪솚??67% 利앷?
+- MRR $50K ??$100K (+100%)
+
+**?ㅼ쓬 留덉씪?ㅽ넠**: ?꾨줈?뺤뀡 諛고룷 諛?踰좏? ?뚯뒪?? ??
+
+---
+
+*?묒꽦?? 2026-01-05*  
+*踰꾩쟾: 1.0*  
+*?곹깭: ???꾨줎?몄뿏??援ы쁽 ?꾨즺*
+

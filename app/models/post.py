@@ -1,4 +1,4 @@
-"""Post model for content management."""
+Ôªø"""Post model for content management."""
 
 import enum
 import uuid
@@ -14,7 +14,10 @@ from app.db.base import BaseModel
 if TYPE_CHECKING:
     from app.models.account import Account
     from app.models.analytics import Analytics
+    from app.models.feedback import PostFeedback
     from app.models.location import Location
+    from app.models.publish_job import PublishJob
+    from app.models.vault import ApprovalAnalysis
 
 
 class Platform(str, enum.Enum):
@@ -29,12 +32,12 @@ class PostStatus(str, enum.Enum):
     """Post lifecycle status."""
 
     DRAFT = "draft"
-    PENDING_APPROVAL = "pending_approval"  # AI Ï¥àÏïà ?ùÏÑ± ?ÑÎ£å, ?πÏù∏ ?ÄÍ∏?
-    APPROVED = "approved"  # ?πÏù∏?? ?ÖÎ°ú???ÄÍ∏?
-    REJECTED = "rejected"  # Í±∞Ï†à??
-    QUEUED = "queued"  # ?àÏïΩ??
-    POSTED = "posted"  # Í≤åÏãú ?ÑÎ£å
-    FAILED = "failed"  # Í≤åÏãú ?§Ìå®
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    QUEUED = "queued"
+    POSTED = "posted"
+    FAILED = "failed"
 
 
 class Post(BaseModel):
@@ -48,17 +51,21 @@ class Post(BaseModel):
 
     platform: Mapped[Platform] = mapped_column(Enum(Platform), nullable=False)
     status: Mapped[PostStatus] = mapped_column(
-        Enum(PostStatus), default=PostStatus.DRAFT, nullable=False, index=True
+        Enum(
+            PostStatus,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        default=PostStatus.DRAFT,
+        nullable=False,
+        index=True,
     )
 
-    # Content
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     hashtags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Scheduling
     scheduled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
@@ -66,15 +73,12 @@ class Post(BaseModel):
         DateTime(timezone=True), nullable=True
     )
 
-    # Provider tracking
     provider_post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Generation metadata
     generated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     generation_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # Approval workflow
     approval_token: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     approval_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -90,23 +94,29 @@ class Post(BaseModel):
     )
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Notification tracking
     notification_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    notification_channel: Mapped[str | None] = mapped_column(String(50), nullable=True)  # kakao, slack, email
+    notification_channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
     notification_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
-    # AI-generated image
     ai_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ai_image_generated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
-    # Relationships
     location: Mapped["Location"] = relationship("Location", back_populates="posts")
     analytics: Mapped[list["Analytics"]] = relationship(
         "Analytics", back_populates="post", cascade="all, delete-orphan"
+    )
+    feedbacks: Mapped[list["PostFeedback"]] = relationship(
+        "PostFeedback", back_populates="post", cascade="all, delete-orphan"
+    )
+    publish_jobs: Mapped[list["PublishJob"]] = relationship(
+        "PublishJob", back_populates="post", cascade="all, delete-orphan"
+    )
+    approval_analysis: Mapped["ApprovalAnalysis | None"] = relationship(
+        "ApprovalAnalysis", back_populates="post", uselist=False, cascade="all, delete-orphan"
     )
     approved_by: Mapped["Account | None"] = relationship("Account", foreign_keys=[approved_by_id])
 

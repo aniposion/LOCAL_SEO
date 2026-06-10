@@ -1,29 +1,27 @@
-"""
-A/B Testing Router
-"""
+"""A/B Testing Router."""
+
 from datetime import datetime
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.routers.deps import get_current_account, get_db
 from app.models.account import Account
+from app.models.location import Location
+from app.routers.deps import get_current_account, get_db
 from app.services.ab_testing import (
     ABTestingService,
-    TestStatus,
-    TestMetric,
-    VariantType,
     TEST_TEMPLATES,
+    TestMetric,
+    TestStatus,
+    VariantType,
 )
 
 router = APIRouter(prefix="/ab-tests", tags=["A/B Testing"])
 
-# Global service instance (in production, use dependency injection)
 _ab_service = ABTestingService()
 
-
-# ============ Schemas ============
 
 class VariantContent(BaseModel):
     title: Optional[str] = None
@@ -38,8 +36,8 @@ class CreateTestRequest(BaseModel):
     name: str
     description: str
     location_id: str
-    test_type: str  # title, body, image, cta, posting_time, hashtags
-    primary_metric: str  # engagement, clicks, calls, directions, conversions
+    test_type: str
+    primary_metric: str
     control_content: VariantContent
     variant_content: VariantContent
     traffic_split: float = 50.0
@@ -106,7 +104,25 @@ class TestTemplatesResponse(BaseModel):
     templates: list[TestTemplateResponse]
 
 
-# ============ Endpoints ============
+def _owned_location_ids(db: Session, account_id) -> set[str]:
+    return {
+        str(location_id)
+        for (location_id,) in db.query(Location.id).filter(Location.account_id == account_id).all()
+    }
+
+
+def _require_owned_location(db: Session, location_id: str, account_id) -> None:
+    if location_id not in _owned_location_ids(db, account_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+
+
+def _require_owned_test(db: Session, test_id: str, account_id):
+    test = _ab_service.get_test(test_id)
+    if not test:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+    _require_owned_location(db, str(test.location_id), account_id)
+    return test
+
 
 @router.get("/templates", response_model=TestTemplatesResponse)
 async def get_test_templates():
@@ -132,6 +148,7 @@ async def get_test_suggestions(
     account: Account = Depends(get_current_account),
 ):
     """Get AI-powered A/B test suggestions."""
+    _require_owned_location(db, location_id, account.id)
     suggestions = _ab_service.generate_test_suggestions(location_id, content_type)
     return TestSuggestionsResponse(
         suggestions=[
@@ -162,7 +179,9 @@ async def create_test(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid test type or metric",
         )
-    
+
+    _require_owned_location(db, request.location_id, account.id)
+
     test = _ab_service.create_test(
         name=request.name,
         description=request.description,
@@ -174,7 +193,7 @@ async def create_test(
         traffic_split=request.traffic_split,
         min_sample_size=request.min_sample_size,
     )
-    
+
     return _test_to_response(test)
 
 
@@ -185,43 +204,27 @@ async def list_tests(
     db: Session = Depends(get_db),
     account: Account = Depends(get_current_account),
 ):
-    """List all A/B tests."""
+    """List A/B tests owned by the current account."""
     status_enum = None
     if status_filter:
         try:
             status_enum = TestStatus(status_filter)
         except ValueError:
-            pass
-    
-    tests = _ab_service.list_tests(location_id=location_id, status=status_enum)
-    
-    # Add demo tests if empty
-    if not tests:
-        # Create demo tests
-        demo_test = _ab_service.create_test(
-            name="Emoji Title Test",
-            description="Testing if emojis in titles increase engagement",
-            location_id=location_id or "demo",
-            test_type=VariantType.TITLE,
-            primary_metric=TestMetric.ENGAGEMENT,
-            control_content={"title": "Weekend Special: 20% Off All BBQ"},
-            variant_content={"title": "🔥 Weekend Special: 20% Off All BBQ 🎉"},
-        )
-        demo_test.status = TestStatus.RUNNING
-        demo_test.start_date = datetime.now()
-        
-        # Add demo metrics
-        demo_test.variants[0].impressions = 1250
-        demo_test.variants[0].clicks = 87
-        demo_test.variants[0].engagement_score = 6.9
-        demo_test.variants[1].impressions = 1180
-        demo_test.variants[1].clicks = 142
-        demo_test.variants[1].engagement_score = 12.0
-        
-        tests = [demo_test]
-    
+            status_enum = None
+
+    owned_location_ids = _owned_location_ids(db, account.id)
+    if location_id is not None:
+        _require_owned_location(db, location_id, account.id)
+        tests = _ab_service.list_tests(location_id=location_id, status=status_enum)
+    else:
+        tests = [
+            test
+            for test in _ab_service.list_tests(status=status_enum)
+            if test.location_id in owned_location_ids
+        ]
+
     return TestListResponse(
-        tests=[_test_to_response(t) for t in tests],
+        tests=[_test_to_response(test) for test in tests],
         total=len(tests),
     )
 
@@ -233,13 +236,7 @@ async def get_test(
     account: Account = Depends(get_current_account),
 ):
     """Get a specific A/B test."""
-    test = _ab_service.get_test(test_id)
-    if not test:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Test not found",
-        )
-    
+    test = _require_owned_test(db, test_id, account.id)
     return _test_to_response(test)
 
 
@@ -251,13 +248,11 @@ async def start_test(
 ):
     """Start an A/B test."""
     try:
+        _require_owned_test(db, test_id, account.id)
         test = _ab_service.start_test(test_id)
         return _test_to_response(test)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.post("/{test_id}/pause", response_model=TestResponse)
@@ -268,13 +263,11 @@ async def pause_test(
 ):
     """Pause an A/B test."""
     try:
+        _require_owned_test(db, test_id, account.id)
         test = _ab_service.pause_test(test_id)
         return _test_to_response(test)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.post("/{test_id}/complete", response_model=TestResponse)
@@ -285,13 +278,11 @@ async def complete_test(
 ):
     """Complete an A/B test and determine winner."""
     try:
+        _require_owned_test(db, test_id, account.id)
         test = _ab_service.complete_test(test_id)
         return _test_to_response(test)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.delete("/{test_id}")
@@ -301,14 +292,10 @@ async def delete_test(
     account: Account = Depends(get_current_account),
 ):
     """Delete an A/B test."""
-    test = _ab_service.get_test(test_id)
-    if not test:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Test not found",
-        )
-    
-    # In production, delete from database
+    _require_owned_test(db, test_id, account.id)
+    deleted = _ab_service.delete_test(test_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
     return {"success": True, "message": "Test deleted"}
 
 
@@ -319,20 +306,17 @@ async def get_test_results(
     account: Account = Depends(get_current_account),
 ):
     """Get detailed test results."""
+    _require_owned_test(db, test_id, account.id)
     results = _ab_service.get_test_results(test_id)
     if not results:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Test not found",
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
     return results
 
 
 def _test_to_response(test) -> TestResponse:
     """Convert ABTest to TestResponse."""
     results = _ab_service.get_test_results(test.id)
-    
+
     return TestResponse(
         id=test.id,
         name=test.name,
@@ -346,17 +330,17 @@ def _test_to_response(test) -> TestResponse:
         is_significant=test.is_statistically_significant,
         variants=[
             VariantResponse(
-                id=v["id"],
-                name=v["name"],
-                is_control=v["is_control"],
-                impressions=v["impressions"],
-                clicks=v["clicks"],
-                conversions=v["conversions"],
-                click_rate=v["click_rate"],
-                conversion_rate=v["conversion_rate"],
-                engagement_score=v["engagement_score"],
+                id=variant["id"],
+                name=variant["name"],
+                is_control=variant["is_control"],
+                impressions=variant["impressions"],
+                clicks=variant["clicks"],
+                conversions=variant["conversions"],
+                click_rate=variant["click_rate"],
+                conversion_rate=variant["conversion_rate"],
+                engagement_score=variant["engagement_score"],
             )
-            for v in results.get("variants", [])
+            for variant in results.get("variants", [])
         ],
         winner_id=results.get("winner"),
         improvement_percent=results.get("improvement_percent"),

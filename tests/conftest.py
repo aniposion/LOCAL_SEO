@@ -1,14 +1,16 @@
 """Pytest configuration and fixtures."""
 
-import os
 from collections.abc import Generator
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import ARRAY as SA_ARRAY, create_engine
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.types import JSON
 
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import Base
@@ -16,6 +18,35 @@ from app.db.session import get_db
 from app.main import app
 from app.models.account import Account, AccountRole
 from app.models.location import Location
+
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(_type, _compiler, **_kwargs) -> str:
+    """Treat PostgreSQL JSONB as JSON in SQLite-backed tests."""
+    return "JSON"
+
+
+@compiles(SA_ARRAY, "sqlite")
+@compiles(PG_ARRAY, "sqlite")
+def compile_array_sqlite(_type, _compiler, **_kwargs) -> str:
+    """Treat PostgreSQL ARRAY as JSON in SQLite-backed tests."""
+    return "JSON"
+
+
+def _array_bind_processor(_self, dialect):
+    """Serialize ARRAY payloads as JSON for SQLite tests."""
+    return JSON().bind_processor(dialect)
+
+
+def _array_result_processor(_self, dialect, coltype):
+    """Deserialize ARRAY payloads from JSON for SQLite tests."""
+    return JSON().result_processor(dialect, coltype)
+
+
+SA_ARRAY.bind_processor = _array_bind_processor
+PG_ARRAY.bind_processor = _array_bind_processor
+SA_ARRAY.result_processor = _array_result_processor
+PG_ARRAY.result_processor = _array_result_processor
 
 # Use SQLite for testing
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
@@ -73,6 +104,22 @@ def test_user(db: Session) -> Account:
 
 
 @pytest.fixture
+def other_user(db: Session) -> Account:
+    """Create a second account for ownership tests."""
+    user = Account(
+        id=uuid4(),
+        email="other@example.com",
+        password_hash=get_password_hash("testpassword123"),
+        role=AccountRole.OWNER,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@pytest.fixture
 def test_user_token(test_user: Account) -> str:
     """Create an access token for test user."""
     return create_access_token(subject=str(test_user.id))
@@ -82,6 +129,18 @@ def test_user_token(test_user: Account) -> str:
 def auth_headers(test_user_token: str) -> dict[str, str]:
     """Create authorization headers."""
     return {"Authorization": f"Bearer {test_user_token}"}
+
+
+@pytest.fixture
+def other_user_token(other_user: Account) -> str:
+    """Create an access token for the second test user."""
+    return create_access_token(subject=str(other_user.id))
+
+
+@pytest.fixture
+def other_auth_headers(other_user_token: str) -> dict[str, str]:
+    """Create authorization headers for the second test user."""
+    return {"Authorization": f"Bearer {other_user_token}"}
 
 
 @pytest.fixture
@@ -97,6 +156,26 @@ def test_location(db: Session, test_user: Account) -> Location:
         country="US",
         phone="555-1234",
         services=["service1", "service2"],
+    )
+    db.add(location)
+    db.commit()
+    db.refresh(location)
+    return location
+
+
+@pytest.fixture
+def other_location(db: Session, other_user: Account) -> Location:
+    """Create a location for the second test user."""
+    location = Location(
+        id=uuid4(),
+        account_id=other_user.id,
+        name="Other Business",
+        address="999 Other St",
+        city="Other City",
+        state="OS",
+        country="US",
+        phone="555-9999",
+        services=["other-service"],
     )
     db.add(location)
     db.commit()

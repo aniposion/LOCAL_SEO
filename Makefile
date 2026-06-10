@@ -1,9 +1,10 @@
-.PHONY: help install dev test lint format migrate run docker-up docker-down clean
+.PHONY: help install dev worker test lint format migrate run docker-up docker-down clean
 
 help:
 	@echo "Available commands:"
 	@echo "  install     - Install dependencies"
 	@echo "  dev         - Run development server"
+	@echo "  worker      - Run dedicated scheduler worker"
 	@echo "  test        - Run tests"
 	@echo "  lint        - Run linter"
 	@echo "  format      - Format code"
@@ -17,6 +18,9 @@ install:
 
 dev:
 	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+worker:
+	python -m app.worker
 
 test:
 	pytest -v --cov=app --cov-report=term-missing

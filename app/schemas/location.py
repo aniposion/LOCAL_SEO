@@ -57,6 +57,12 @@ class LocationResponse(LocationBase):
     account_id: UUID
     gbp_location_id: str | None = None
     ig_business_id: str | None = None
+    gbp_connected: bool = False
+    gbp_status: str | None = None
+    instagram_connected: bool = False
+    instagram_status: str | None = None
+    website_connected: bool = False
+    website_status: str | None = None
     created_at: datetime
     updated_at: datetime
 

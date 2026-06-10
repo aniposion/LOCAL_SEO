@@ -1,9 +1,14 @@
 """Instagram Graph API integration."""
 
-from datetime import date
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 import httpx
+
+
+def _date_to_unix(value: date) -> int:
+    """Convert a date to a UTC midnight Unix timestamp."""
+    return int(datetime.combine(value, time.min, tzinfo=timezone.utc).timestamp())
 
 
 class InstagramClient:
@@ -11,7 +16,11 @@ class InstagramClient:
 
     def __init__(self, credentials: dict) -> None:
         self.access_token = credentials.get("access_token")
-        self.ig_user_id = credentials.get("ig_user_id")
+        self.ig_user_id = (
+            credentials.get("ig_user_id")
+            or credentials.get("instagram_account_id")
+            or credentials.get("account_id")
+        )
         self.base_url = "https://graph.facebook.com/v18.0"
         self.timeout = httpx.Timeout(30.0)
 
@@ -39,7 +48,12 @@ class InstagramClient:
             if response.status_code >= 400:
                 raise Exception(f"Instagram API error: {response.status_code} - {response.text}")
 
-            return response.json()
+            return response.json() if response.text else {}
+
+    def _require_ig_user_id(self) -> str:
+        if not self.ig_user_id:
+            raise ValueError("Instagram business account ID is required")
+        return self.ig_user_id
 
     async def publish_image(
         self,
@@ -145,8 +159,8 @@ class InstagramClient:
             params={
                 "metric": "reach,impressions,profile_views",
                 "period": "day",
-                "since": int(start_date.strftime("%s")),
-                "until": int(end_date.strftime("%s")),
+                "since": _date_to_unix(start_date),
+                "until": _date_to_unix(end_date),
             },
         )
 
@@ -207,3 +221,71 @@ class InstagramClient:
             insights[item.get("name")] = item.get("values", [{}])[0].get("value", 0)
 
         return insights
+
+    async def get_conversations(self, limit: int = 20) -> dict:
+        """Get Instagram business conversations with recent message snippets."""
+        ig_user_id = self._require_ig_user_id()
+        return await self._request(
+            "GET",
+            f"{ig_user_id}/conversations",
+            params={
+                "platform": "instagram",
+                "limit": limit,
+                "fields": (
+                    "id,participants,"
+                    "messages.limit(10){id,message,from,created_time,is_echo}"
+                ),
+            },
+        )
+
+    async def send_dm(self, recipient_id: str, message_text: str) -> str:
+        """Send an Instagram direct message through the business messaging endpoint."""
+        ig_user_id = self._require_ig_user_id()
+        result = await self._request(
+            "POST",
+            f"{ig_user_id}/messages",
+            json={
+                "recipient": {"id": recipient_id},
+                "message": {"text": message_text},
+            },
+        )
+        return str(result.get("message_id") or result.get("id") or "")
+
+    async def get_comments(self, media_id: str | None = None, limit: int = 20) -> dict:
+        """Get comments for a media item, or flatten recent media comments."""
+        if media_id:
+            return await self._request(
+                "GET",
+                f"{media_id}/comments",
+                params={
+                    "limit": limit,
+                    "fields": "id,text,username,timestamp,from",
+                },
+            )
+
+        ig_user_id = self._require_ig_user_id()
+        media = await self._request(
+            "GET",
+            f"{ig_user_id}/media",
+            params={
+                "limit": limit,
+                "fields": "id,comments.limit(10){id,text,username,timestamp,from}",
+            },
+        )
+        comments: list[dict] = []
+        for item in media.get("data", []):
+            for comment in item.get("comments", {}).get("data", []):
+                comment.setdefault("media_id", item.get("id"))
+                comments.append(comment)
+                if len(comments) >= limit:
+                    return {"data": comments}
+        return {"data": comments}
+
+    async def reply_to_comment(self, comment_id: str, message_text: str) -> str:
+        """Reply publicly to an Instagram comment."""
+        result = await self._request(
+            "POST",
+            f"{comment_id}/replies",
+            json={"message": message_text},
+        )
+        return str(result.get("id") or "")

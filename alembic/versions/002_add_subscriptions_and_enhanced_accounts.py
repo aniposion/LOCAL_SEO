@@ -84,8 +84,11 @@ def upgrade() -> None:
     )
     op.create_index('ix_payment_history_account_id', 'payment_history', ['account_id'])
 
+    # Create channelstatus enum first
+    op.execute("CREATE TYPE channelstatus AS ENUM ('PENDING', 'CONNECTED', 'DISCONNECTED', 'ERROR', 'EXPIRED')")
+    
     # Update channels table
-    op.add_column('channels', sa.Column('status', sa.Enum('PENDING', 'CONNECTED', 'DISCONNECTED', 'ERROR', 'EXPIRED', name='channelstatus'), nullable=False, server_default='PENDING'))
+    op.add_column('channels', sa.Column('status', sa.Enum('PENDING', 'CONNECTED', 'DISCONNECTED', 'ERROR', 'EXPIRED', name='channelstatus', create_type=False), nullable=False, server_default='PENDING'))
     op.add_column('channels', sa.Column('credentials_encrypted', sa.Text(), nullable=True))
     op.add_column('channels', sa.Column('platform_account_id', sa.String(255), nullable=True))
     op.add_column('channels', sa.Column('platform_account_name', sa.String(255), nullable=True))

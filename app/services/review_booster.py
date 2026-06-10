@@ -13,6 +13,26 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _analytics_review_value(analytics, key: str) -> float:
+    """Read review metrics from current columns or legacy source payloads."""
+    source_raw = analytics.source_raw if isinstance(getattr(analytics, "source_raw", None), dict) else {}
+    if key == "new_reviews":
+        value = getattr(analytics, "new_reviews", None)
+        if value is None:
+            value = source_raw.get("new_reviews", source_raw.get("reviews", 0))
+    elif key == "avg_rating":
+        value = getattr(analytics, "avg_rating", None)
+        if value is None:
+            value = source_raw.get("avg_rating", source_raw.get("rating", 0))
+    else:
+        value = source_raw.get(key, 0)
+
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class ReviewSentiment(str, Enum):
     """Review sentiment classification."""
     POSITIVE = "positive"  # 4-5 stars
@@ -308,17 +328,16 @@ Sincerely,
         }
 
         for a in analytics:
-            if a.metrics:
-                reviews = a.metrics.get("new_reviews", 0)
-                avg_rating = a.metrics.get("avg_rating", 0)
-                total_reviews += reviews
-                total_rating += avg_rating * reviews if reviews else 0
+            reviews = int(_analytics_review_value(a, "new_reviews"))
+            avg_rating = _analytics_review_value(a, "avg_rating")
+            total_reviews += reviews
+            total_rating += avg_rating * reviews if reviews else 0
 
-                # Weekly breakdown
-                week = a.date.isocalendar()[1]
-                if week not in reviews_by_week:
-                    reviews_by_week[week] = 0
-                reviews_by_week[week] += reviews
+            # Weekly breakdown
+            week = a.date.isocalendar()[1]
+            if week not in reviews_by_week:
+                reviews_by_week[week] = 0
+            reviews_by_week[week] += reviews
 
         avg_rating = total_rating / total_reviews if total_reviews else 0
 
@@ -403,8 +422,7 @@ Sincerely,
             f"Reviewer: {review_data.get('reviewer_name')}"
         )
 
-        # Notify business owner
-        # TODO: Send alert to owner about negative review
+        await self._notify_negative_review(location, review_data)
 
         return {
             "success": True,
@@ -423,6 +441,39 @@ Sincerely,
             "action": "positive_acknowledged",
             "message": "Positive review received",
         }
+
+    async def _notify_negative_review(self, location, review_data: dict[str, Any]) -> None:
+        """Create an actionable owner alert for negative review follow-up."""
+        from app.services.notification import NotificationService
+
+        rating = review_data.get("rating")
+        reviewer_name = review_data.get("reviewer_name") or "Customer"
+        review_text = (review_data.get("review_text") or "").strip()
+        preview = review_text[:160]
+        if review_text and len(review_text) > 160:
+            preview = f"{preview}..."
+
+        title = f"Negative review needs follow-up for {location.name}"
+        message_lines = [
+            f"Reviewer: {reviewer_name}",
+            f"Rating: {rating if rating is not None else 'Not recorded'}",
+        ]
+        if preview:
+            message_lines.append(f"Review: {preview}")
+        message_lines.append("Open the reviews workflow and follow up with the customer.")
+
+        await NotificationService(self.db).send_notification(
+            account_id=location.account_id,
+            title=title,
+            message="\n".join(message_lines),
+            notification_type="review_booster_negative_review",
+            data={
+                "location_id": str(location.id),
+                "url": f"/dashboard/reviews?locationId={location.id}",
+                "rating": rating,
+                "reviewer_name": reviewer_name,
+            },
+        )
 
     async def _log_review_request(
         self,

@@ -20,6 +20,7 @@ cryptography==41.0.7
 
 # HTTP client
 httpx==0.26.0
+sentry-sdk==2.23.1
 
 # Scheduling
 apscheduler==3.10.4
@@ -37,6 +38,9 @@ twilio==8.10.0
 # Google AI (Gemini / Image Generation)
 google-genai==1.0.0
 
+# Image processing (for social proof cards)
+Pillow==10.2.0
+
 # Markdown processing
 markdown==3.5.2
 
@@ -47,7 +51,6 @@ markdown==3.5.2
 pytest==7.4.4
 pytest-asyncio==0.23.3
 pytest-cov==4.1.0
-httpx==0.26.0
 
 # Development
 ruff==0.1.14

@@ -414,55 +414,30 @@ async def start_free_trial(
     current_user: Account = Depends(get_current_user),
 ):
     """
-    Start free trial after viewing solution presentation.
+    Start a no-card free preview after viewing the solution presentation.
     
     This is the final CTA action:
-    1. Create/activate subscription with trial
+    1. Create/activate a Free-plan preview
     2. Set up default preferences
     3. Redirect to dashboard
     """
-    from app.models.subscription import Subscription, PlanType, SubscriptionStatus
-    from datetime import datetime, timezone, timedelta
+    from app.models.subscription import FREE_PREVIEW_DAYS
+    from app.services.billing import BillingService
 
-    # Check if user already has subscription
-    existing = db.query(Subscription).filter(
-        Subscription.account_id == current_user.id
-    ).first()
-
-    if existing and existing.status == SubscriptionStatus.ACTIVE:
-        return {
-            "success": True,
-            "message": "You already have an active subscription.",
-            "redirect": "/dashboard",
-        }
-
-    # Create trial subscription
-    trial_end = datetime.now(timezone.utc) + timedelta(days=7)
-
-    if existing:
-        existing.status = SubscriptionStatus.TRIALING
-        existing.trial_ends_at = trial_end
-        existing.plan = PlanType.STARTER
-    else:
-        subscription = Subscription(
-            account_id=current_user.id,
-            plan=PlanType.STARTER,
-            status=SubscriptionStatus.TRIALING,
-            trial_ends_at=trial_end,
-        )
-        db.add(subscription)
-
-    db.commit()
+    try:
+        subscription = await BillingService(db).start_trial(account_id=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return {
         "success": True,
-        "message": "Your 7-day free trial has started!",
-        "trial_ends_at": trial_end.isoformat(),
+        "message": f"Your {FREE_PREVIEW_DAYS}-day free preview has started.",
+        "trial_ends_at": subscription.trial_end.isoformat() if subscription.trial_end else None,
         "redirect": "/dashboard",
         "next_steps": [
-            "Connect your Google Business Profile",
-            "Review your first AI-generated content",
-            "Set up notification preferences",
+            "Review your audit and dashboard",
+            "Connect only the channels you want to evaluate",
+            "Choose a paid plan before using AI, SMS, publishing, or automation workflows",
         ],
     }
 
@@ -482,26 +457,17 @@ async def request_free_audit(
     Results will be sent to the provided email.
     This is for the landing page lead capture.
     """
-    # For free audit, create a temporary/guest account or just store the lead
-    from app.models.onboarding import OnboardingAudit
-
-    audit = OnboardingAudit(
-        account_id=None,  # No account yet
+    service = OnboardingAuditService(db)
+    audit = await service.start_onboarding(
+        account_id=None,
+        contact_email=str(email),
         business_name=request.business_name,
         address=request.address,
         city=request.city,
         state=request.state,
         phone=request.phone,
         website_url=request.website_url,
-        status=OnboardingStatus.PENDING,
     )
-
-    db.add(audit)
-    db.commit()
-    db.refresh(audit)
-
-    # TODO: Store email as lead
-    # TODO: Send email with results when complete
 
     # Start background search
     background_tasks.add_task(
@@ -515,6 +481,57 @@ async def request_free_audit(
         status="processing",
         message=f"Your free audit is being prepared. Results will be sent to {email}",
     )
+
+
+@router.post("/free-audit/{audit_id}/select-business")
+async def select_business_for_free_audit(
+    audit_id: UUID,
+    request: SelectBusinessRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """
+    Select a business candidate for a public free audit flow.
+
+    This keeps the non-auth free-audit path usable when multiple Google Maps
+    matches are found.
+    """
+    from app.models.onboarding import OnboardingAudit
+
+    audit = db.query(OnboardingAudit).filter(
+        OnboardingAudit.id == audit_id,
+        OnboardingAudit.account_id.is_(None),
+    ).first()
+
+    if not audit:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Free audit not found",
+        )
+
+    if audit.place_candidates:
+        valid_ids = [candidate["place_id"] for candidate in audit.place_candidates]
+        if request.place_id not in valid_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid place_id. Must be one of the candidates.",
+            )
+
+    audit.status = OnboardingStatus.ANALYZING
+    db.commit()
+
+    background_tasks.add_task(
+        run_full_analysis,
+        audit_id,
+        request.place_id,
+        db,
+    )
+
+    return {
+        "audit_id": str(audit_id),
+        "status": "analyzing",
+        "message": "Analyzing your business...",
+    }
 
 
 @router.get("/free-audit/{audit_id}/status")

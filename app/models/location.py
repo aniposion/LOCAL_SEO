@@ -13,10 +13,23 @@ if TYPE_CHECKING:
     from app.models.account import Account
     from app.models.analytics import Analytics
     from app.models.channel import Channel
+    from app.models.content_calendar import AutopilotSettings, ContentCalendar
+    from app.models.feedback import BrandVoiceProfile
+    from app.models.recommendation import Recommendation
+    from app.models.revenue import RevenueProfile
     from app.models.post import Post
     from app.models.report import Report
     from app.models.schedule import Schedule
     from app.models.seo_score import SEOScore
+    from app.models.metrics import MetricSnapshot
+    from app.models.review_booster import ReviewCampaign
+    from app.models.calls import TwilioNumber, SMSThread
+    from app.models.oauth import OAuthToken
+    from app.models.social_response import SocialAutomationSettings, SocialResponseLog
+    from app.models.website_seo import WebsiteSEODraft
+    from app.models.qa import QADraft
+    from app.models.vault import EntityVault
+    from app.models.competitor import Competitor
 
 
 class Location(BaseModel):
@@ -68,9 +81,84 @@ class Location(BaseModel):
     reports: Mapped[list["Report"]] = relationship(
         "Report", back_populates="location", cascade="all, delete-orphan"
     )
+    content_calendars: Mapped[list["ContentCalendar"]] = relationship(
+        "ContentCalendar", back_populates="location", cascade="all, delete-orphan"
+    )
+    autopilot_settings: Mapped["AutopilotSettings | None"] = relationship(
+        "AutopilotSettings", back_populates="location", uselist=False, cascade="all, delete-orphan"
+    )
     schedules: Mapped[list["Schedule"]] = relationship(
         "Schedule", back_populates="location", cascade="all, delete-orphan"
     )
+    brand_voice_profile: Mapped["BrandVoiceProfile | None"] = relationship(
+        "BrandVoiceProfile", back_populates="location", uselist=False, cascade="all, delete-orphan"
+    )
+    recommendations: Mapped[list["Recommendation"]] = relationship(
+        "Recommendation", back_populates="location", cascade="all, delete-orphan"
+    )
+    
+    # P1: Metrics
+    metric_snapshots: Mapped[list["MetricSnapshot"]] = relationship(
+        "MetricSnapshot", back_populates="location", cascade="all, delete-orphan"
+    )
+    revenue_profile: Mapped["RevenueProfile | None"] = relationship(
+        "RevenueProfile", back_populates="location", uselist=False, cascade="all, delete-orphan"
+    )
+    
+    # P2: Review Booster
+    review_campaigns: Mapped[list["ReviewCampaign"]] = relationship(
+        "ReviewCampaign", back_populates="location", cascade="all, delete-orphan"
+    )
+    
+    # P3: Calls
+    twilio_numbers: Mapped[list["TwilioNumber"]] = relationship(
+        "TwilioNumber", back_populates="location", cascade="all, delete-orphan"
+    )
+    sms_threads: Mapped[list["SMSThread"]] = relationship(
+        "SMSThread", back_populates="location", cascade="all, delete-orphan"
+    )
+    
+    # P4: OAuth
+    oauth_tokens: Mapped[list["OAuthToken"]] = relationship(
+        "OAuthToken", back_populates="location", cascade="all, delete-orphan"
+    )
+    social_response_logs: Mapped[list["SocialResponseLog"]] = relationship(
+        "SocialResponseLog", back_populates="location", cascade="all, delete-orphan"
+    )
+    social_automation_settings: Mapped["SocialAutomationSettings | None"] = relationship(
+        "SocialAutomationSettings", back_populates="location", uselist=False, cascade="all, delete-orphan"
+    )
+    website_seo_drafts: Mapped[list["WebsiteSEODraft"]] = relationship(
+        "WebsiteSEODraft", back_populates="location", cascade="all, delete-orphan"
+    )
+    qa_drafts: Mapped[list["QADraft"]] = relationship(
+        "QADraft", back_populates="location", cascade="all, delete-orphan"
+    )
+    
+    # P5: Vault
+    entity_vault: Mapped["EntityVault | None"] = relationship(
+        "EntityVault", back_populates="location", uselist=False, cascade="all, delete-orphan"
+    )
+    
+    # P6: Competitor Analysis
+    competitors: Mapped[list["Competitor"]] = relationship(
+        "Competitor", back_populates="location", cascade="all, delete-orphan"
+    )
+    
+    @property
+    def latitude(self) -> float | None:
+        """Get latitude."""
+        return self.lat
+    
+    @property
+    def longitude(self) -> float | None:
+        """Get longitude."""
+        return self.lng
+    
+    @property
+    def business_name(self) -> str:
+        """Get business name."""
+        return self.name
 
     def __repr__(self) -> str:
         return f"<Location {self.name}>"

@@ -1,6 +1,6 @@
 """Approval workflow router for content management."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -11,11 +11,37 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.routers.deps import get_current_user
 from app.models.account import Account
+from app.models.location import Location
 from app.models.post import Post, PostStatus
-from app.services.approval import ApprovalWorkflowService
+from app.services.approval import (
+    ApprovalGenerationUnavailableError,
+    ApprovalUsageLimitError,
+    ApprovalWorkflowService,
+)
+from app.services.feature_access import FeatureAccessService
 from app.services.notification import NotificationChannel
 
 router = APIRouter(prefix="/approval", tags=["approval"])
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    """Serialize datetimes with a stable UTC offset for public approval payloads."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
+
+
+def _feature_for_platform_target(target: str) -> str | None:
+    normalized = target.strip().upper()
+    if normalized in {"GBP", "GOOGLE", "GOOGLE_BUSINESS_PROFILE"}:
+        return "google_posts"
+    if normalized == "INSTAGRAM":
+        return "instagram_upload"
+    if normalized == "WEBSITE":
+        return "website_seo_basic"
+    return None
 
 
 # ============ Schemas ============
@@ -156,6 +182,14 @@ async def create_draft_for_approval(
     except ValueError:
         notification_channel = NotificationChannel.SLACK
 
+    feature_access = FeatureAccessService(db)
+    for target in request.platform_targets or ["GBP", "INSTAGRAM", "WEBSITE"]:
+        feature = _feature_for_platform_target(target)
+        if feature:
+            feature_access.check_feature_access(current_user, feature)
+    if notification_channel == NotificationChannel.SMS:
+        feature_access.check_feature_access(current_user, "missed_call_text_back")
+
     service = ApprovalWorkflowService(db)
 
     try:
@@ -176,6 +210,10 @@ async def create_draft_for_approval(
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ApprovalUsageLimitError as e:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=e.detail)
+    except ApprovalGenerationUnavailableError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
 
 @router.post("/posts/{post_id}/approve", response_model=PostApprovalResponse)
@@ -302,7 +340,7 @@ async def get_pending_approvals(
             image_url=post.ai_image_url,
             location_name=post.location.name if post.location else None,
             approval_requested_at=post.approval_requested_at,
-            approval_url=f"{settings.app_url}/approval/posts/{post.id}/approve?token={post.approval_token}",
+            approval_url=f"{settings.app_url}/approve/{post.id}?token={post.approval_token}",
         )
         for post in posts
     ]
@@ -346,9 +384,13 @@ async def preview_post_for_approval(
 
     if post.status != PostStatus.PENDING_APPROVAL:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_410_GONE,
             detail=f"Post is not pending approval (status: {post.status.value})",
         )
+
+    location = post.location
+    if location is None and post.location_id:
+        location = db.query(Location).filter(Location.id == post.location_id).first()
 
     return {
         "id": str(post.id),
@@ -360,11 +402,14 @@ async def preview_post_for_approval(
         "image_url": post.ai_image_url or post.image_url,
         "image_prompt": post.image_prompt,
         "location": {
-            "name": post.location.name if post.location else None,
-            "city": post.location.city if post.location else None,
+            "name": location.name if location else None,
+            "address": location.address if location else None,
+            "city": location.city if location else None,
         },
         "generated_by": post.generated_by,
-        "approval_requested_at": post.approval_requested_at.isoformat() if post.approval_requested_at else None,
+        "scheduled_at": _serialize_datetime(post.scheduled_at),
+        "created_at": _serialize_datetime(post.created_at),
+        "approval_requested_at": _serialize_datetime(post.approval_requested_at),
     }
 
 
@@ -388,7 +433,7 @@ async def quick_approve_post(
         )
         return {
             "success": True,
-            "message": "콘텐츠가 승인되었습니다.",
+            "message": "Content approved successfully",
             "post_id": str(post.id),
             "status": post.status.value,
         }
@@ -418,7 +463,7 @@ async def quick_reject_post(
         )
         return {
             "success": True,
-            "message": "콘텐츠가 거절되었습니다.",
+            "message": "Content rejected successfully",
             "post_id": str(post.id),
             "status": post.status.value,
         }
@@ -451,6 +496,7 @@ async def update_notification_preferences(
 
     # Validate phone number if SMS is selected
     if request.channel in ["sms", "both"]:
+        FeatureAccessService(db).check_feature_access(current_user, "missed_call_text_back")
         phone = request.phone_number or current_user.phone
         if not phone:
             raise HTTPException(
@@ -504,9 +550,15 @@ async def send_approval_notification(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
+    location = db.query(Location).filter(Location.id == post.location_id).first()
+    if not location or location.account_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Post not found")
+
     # Determine channel
     target_channel = channel or current_user.notification_channel or "email"
     target_phone = phone_number or current_user.phone
+    if target_channel in {"sms", "both"}:
+        FeatureAccessService(db).check_feature_access(current_user, "missed_call_text_back")
 
     # Send notification
     service = MagicApprovalService(db)
@@ -529,3 +581,4 @@ async def send_approval_notification(
         "channel": target_channel,
         "result": result,
     }
+

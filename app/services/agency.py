@@ -1,5 +1,6 @@
 """Multi-location & Agency Mode - Team management and white-labeling."""
 
+from copy import deepcopy
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -12,6 +13,42 @@ from sqlalchemy import func
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _settings_copy(account) -> dict[str, Any]:
+    """Return a writable copy so SQLAlchemy persists JSON changes."""
+    return deepcopy(account.settings) if isinstance(account.settings, dict) else {}
+
+
+def _save_settings(db: Session, account, settings_payload: dict[str, Any]) -> None:
+    """Assign settings back to the model instead of mutating JSON in place."""
+    account.settings = settings_payload
+    db.add(account)
+    db.commit()
+
+
+def _analytics_metric_value(analytics, metric: str) -> int:
+    """Read agency metrics from the current column-based Analytics model."""
+    source_raw = analytics.source_raw if isinstance(analytics.source_raw, dict) else {}
+    metric_map = {
+        "calls": "calls",
+        "directions": "direction_requests",
+        "direction_requests": "direction_requests",
+        "impressions": "impressions",
+    }
+
+    if metric == "new_reviews":
+        value = source_raw.get("new_reviews", source_raw.get("reviews", 0))
+    else:
+        attr = metric_map.get(metric, metric)
+        value = getattr(analytics, attr, None)
+        if value is None:
+            value = source_raw.get(metric, source_raw.get(attr, 0))
+
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 class TeamRole(str, Enum):
@@ -152,13 +189,11 @@ class AgencyService:
 
         # Store in agency's team_members (would be a separate table in production)
         # For now, we'll use account settings
-        if not agency.settings:
-            agency.settings = {}
-        if "team_members" not in agency.settings:
-            agency.settings["team_members"] = []
-
-        agency.settings["team_members"].append(team_member)
-        self.db.commit()
+        settings_payload = _settings_copy(agency)
+        members = list(settings_payload.get("team_members") or [])
+        members.append(team_member)
+        settings_payload["team_members"] = members
+        _save_settings(self.db, agency, settings_payload)
 
         # Send invite email
         await self._send_team_invite_email(
@@ -189,10 +224,12 @@ class AgencyService:
         accounts = self.db.query(Account).all()
 
         for account in accounts:
-            if not account.settings or "team_members" not in account.settings:
+            settings_payload = _settings_copy(account)
+            if "team_members" not in settings_payload:
                 continue
 
-            for member in account.settings["team_members"]:
+            members = list(settings_payload.get("team_members") or [])
+            for member in members:
                 if member.get("invite_token") == invite_token:
                     # Check expiration
                     expires = datetime.fromisoformat(member["invite_expires"])
@@ -206,7 +243,8 @@ class AgencyService:
                     del member["invite_token"]
                     del member["invite_expires"]
 
-                    self.db.commit()
+                    settings_payload["team_members"] = members
+                    _save_settings(self.db, account, settings_payload)
 
                     return {
                         "success": True,
@@ -270,12 +308,14 @@ class AgencyService:
         if not agency or not agency.settings:
             return {"success": False, "error": "Agency not found"}
 
-        members = agency.settings.get("team_members", [])
+        settings_payload = _settings_copy(agency)
+        members = list(settings_payload.get("team_members") or [])
 
         for member in members:
             if member.get("email") == member_email:
                 member["role"] = new_role.value
-                self.db.commit()
+                settings_payload["team_members"] = members
+                _save_settings(self.db, agency, settings_payload)
                 return {"success": True, "message": f"Role updated to {new_role.value}"}
 
         return {"success": False, "error": "Team member not found"}
@@ -294,12 +334,14 @@ class AgencyService:
         if not agency or not agency.settings:
             return {"success": False, "error": "Agency not found"}
 
-        members = agency.settings.get("team_members", [])
-        agency.settings["team_members"] = [
-            m for m in members if m.get("email") != member_email
-        ]
+        settings_payload = _settings_copy(agency)
+        members = list(settings_payload.get("team_members") or [])
+        updated_members = [m for m in members if m.get("email") != member_email]
+        if len(updated_members) == len(members):
+            return {"success": False, "error": "Team member not found"}
 
-        self.db.commit()
+        settings_payload["team_members"] = updated_members
+        _save_settings(self.db, agency, settings_payload)
         return {"success": True, "message": f"Removed {member_email} from team"}
 
     def check_permission(
@@ -340,8 +382,7 @@ class AgencyService:
         if not agency:
             return {"success": False, "error": "Agency not found"}
 
-        if not agency.settings:
-            agency.settings = {}
+        settings_payload = _settings_copy(agency)
 
         # Validate settings
         allowed_keys = [
@@ -350,14 +391,14 @@ class AgencyService:
             "footer_text", "hide_powered_by", "favicon_url",
         ]
 
-        white_label = agency.settings.get("white_label", {})
+        white_label = dict(settings_payload.get("white_label") or {})
 
         for key, value in settings.items():
             if key in allowed_keys:
                 white_label[key] = value
 
-        agency.settings["white_label"] = white_label
-        self.db.commit()
+        settings_payload["white_label"] = white_label
+        _save_settings(self.db, agency, settings_payload)
 
         return {
             "success": True,
@@ -418,6 +459,9 @@ class AgencyService:
 
         if not locations:
             return {"success": False, "error": "No locations found"}
+
+        if report_type not in {"weekly", "monthly"}:
+            return {"success": False, "error": "Unsupported report type"}
 
         reporting_service = ReportingService(self.db)
         results = []
@@ -486,11 +530,9 @@ class AgencyService:
         if not agency:
             return {"success": False, "error": "Agency not found"}
 
-        if not agency.settings:
-            agency.settings = {}
-
-        agency.settings["bulk_report_schedule"] = schedule
-        self.db.commit()
+        settings_payload = _settings_copy(agency)
+        settings_payload["bulk_report_schedule"] = schedule
+        _save_settings(self.db, agency, settings_payload)
 
         return {
             "success": True,
@@ -541,11 +583,10 @@ class AgencyService:
         total_reviews = 0
 
         for a in analytics:
-            if a.metrics:
-                total_calls += a.metrics.get("calls", 0)
-                total_directions += a.metrics.get("direction_requests", 0)
-                total_impressions += a.metrics.get("impressions", 0)
-                total_reviews += a.metrics.get("new_reviews", 0)
+            total_calls += _analytics_metric_value(a, "calls")
+            total_directions += _analytics_metric_value(a, "directions")
+            total_impressions += _analytics_metric_value(a, "impressions")
+            total_reviews += _analytics_metric_value(a, "new_reviews")
 
         # Get pending approvals
         pending_posts = self.db.query(Post).filter(
@@ -558,8 +599,8 @@ class AgencyService:
         for loc in locations:
             loc_analytics = [a for a in analytics if a.location_id == loc.id]
 
-            loc_calls = sum(a.metrics.get("calls", 0) for a in loc_analytics if a.metrics)
-            loc_directions = sum(a.metrics.get("direction_requests", 0) for a in loc_analytics if a.metrics)
+            loc_calls = sum(_analytics_metric_value(a, "calls") for a in loc_analytics)
+            loc_directions = sum(_analytics_metric_value(a, "directions") for a in loc_analytics)
 
             location_summaries.append({
                 "id": str(loc.id),
@@ -623,9 +664,7 @@ class AgencyService:
                 Analytics.date >= start_date,
             ).all()
 
-            total = sum(
-                a.metrics.get(metric, 0) for a in analytics if a.metrics
-            )
+            total = sum(_analytics_metric_value(a, metric) for a in analytics)
 
             results.append({
                 "location_id": str(loc.id),

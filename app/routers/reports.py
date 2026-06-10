@@ -11,7 +11,12 @@ from app.models.location import Location
 from app.models.report import Report
 from app.routers.deps import get_current_user
 from app.schemas.report import ReportGenerateRequest, ReportResponse
-from app.services.reporting import ReportingService
+from app.services.feature_access import FeatureAccessService
+from app.services.reporting import (
+    ReportingDeliveryError,
+    ReportingService,
+    ReportingUnavailableError,
+)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -79,10 +84,23 @@ async def generate_weekly_report(
     if not location:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
 
-    reporting_service = ReportingService(db)
-    report = await reporting_service.generate_weekly_report(
-        location_id=request.location_id,
-        send_email=request.send_email,
-    )
+    FeatureAccessService(db).check_feature_access(current_user, "weekly_report")
 
-    return report
+    reporting_service = ReportingService(db)
+    try:
+        return await reporting_service.generate_weekly_report(
+            location_id=request.location_id,
+            send_email=request.send_email,
+        )
+    except ReportingUnavailableError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ReportingDeliveryError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc

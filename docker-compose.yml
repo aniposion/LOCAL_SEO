@@ -16,6 +16,22 @@ services:
       - ./app:/app/app
     restart: unless-stopped
 
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment:
+      - APP_ENV=dev
+      - DATABASE_URL=postgresql+psycopg2://seo:seopassword@db:5432/seo_optimizer
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production-min-32-chars
+      - SCHEDULER_ENABLED=true
+      - SCHEDULER_TARGET=all
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    restart: unless-stopped
+
   db:
     image: postgres:16-alpine
     environment:

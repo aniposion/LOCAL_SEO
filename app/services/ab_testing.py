@@ -193,7 +193,15 @@ class ABTestingService:
             test.winner_variant_id = winner.id
         
         return test
-    
+
+    def delete_test(self, test_id: str) -> bool:
+        """Delete an A/B test from in-memory storage."""
+        return self._tests.pop(test_id, None) is not None
+
+    def clear_tests(self) -> None:
+        """Clear all tests. Useful for isolated tests."""
+        self._tests.clear()
+
     def record_impression(self, test_id: str, variant_id: str) -> None:
         """Record an impression for a variant."""
         test = self._tests.get(test_id)
@@ -314,10 +322,10 @@ class ABTestingService:
             suggestions = [
                 {
                     "type": VariantType.TITLE,
-                    "name": "Emoji vs No Emoji",
-                    "description": "Test if emojis in titles increase engagement",
+                    "name": "Urgency vs Standard Title",
+                    "description": "Test if a more urgent title increases engagement",
                     "control": "Weekend Special: 20% Off",
-                    "variant": "🔥 Weekend Special: 20% Off 🎉",
+                    "variant": "Weekend Special: Save 20% Today",
                 },
                 {
                     "type": VariantType.CTA,
